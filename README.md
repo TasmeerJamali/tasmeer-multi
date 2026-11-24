@@ -37,7 +37,8 @@ the same account signed in twice.
 
 A reply in progress is one block: everything it did so far, in order, and a last line that always says
 what it is doing (thinking with its own words, writing a step, running a command, a helper agent's
-current step, writing the answer). Type while it works and your message waits in a queue (top picture).
+current step, writing the answer). Type while it works and your message waits in a queue (top picture),
+or press **Send now** (Ctrl+Enter) and Claude reads it after the step it is on.
 
 ### It can ask you things
 

@@ -39,6 +39,8 @@ contextBridge.exposeInMainWorld('multi', {
   stop: (key) => ipcRenderer.invoke('stop', key),
   onQueue: on('queue'),
   unqueue: (key, id) => ipcRenderer.invoke('unqueue', key, id),
+  sendNow: (key, text, files) => ipcRenderer.invoke('send-now', key, text, files),
+  queueSendNow: (key, id) => ipcRenderer.invoke('queue-send-now', key, id),
   answer: (key, id, reply) => ipcRenderer.invoke('answer', key, id, reply),
   onUpdate: on('update'),
   restart: (whenIdle) => ipcRenderer.invoke('restart', whenIdle),

@@ -115,6 +115,14 @@ function normalize(engine, e) {
   const ts = e.timestamp;
   if (engine === 'claude') {
     if (e.isSidechain || e.isMeta) return out;
+    // A message you sent while a reply was running ("Send now" here, or typing while it works in the Claude
+    // app) is saved as a queued_command note, not as a message; without this it never showed (Nov 25, 2026).
+    if (e.type === 'attachment' && e.attachment && e.attachment.type === 'queued_command') {
+      const p = e.attachment.prompt;
+      const t = typeof p === 'string' ? p : Array.isArray(p) ? p.filter((x) => x && x.type === 'text').map((x) => x.text).join('\n') : '';
+      if (t && t.trim()) out.push({ role: 'user', text: t, ts, via: '', midRun: true });
+      return out;
+    }
     if (e.type === 'user' && e.message && (e.isCompactSummary || e.isVisibleInTranscriptOnly)) { out.push({ role: 'note', text: 'Claude Code summarized the earlier conversation here (the chat got long)', ts }); return out; }
     if (e.type === 'user' && e.message && (e.promptSource === 'system' || e.turnOrigin === 'task_notification' || /^\s*<task-notification>/.test(claudeText(e.message.content)))) { out.push({ role: 'note', text: 'A background task finished and reported back', ts }); return out; }
     if (e.type === 'user' && e.message) {

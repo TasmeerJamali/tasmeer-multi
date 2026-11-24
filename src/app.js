@@ -279,7 +279,7 @@ function groupItems(items) {
     if (it.role === 'model') continue;
     const t = tsOf(it);
     if (it.role === 'note') { block = null; out.push({ kind: 'note', text: it.text, ts: it.ts, voice: !!it.voice }); }
-    else if (it.role === 'user') { block = null; out.push({ kind: 'user', text: it.text, ts: it.ts, via: it.via }); }
+    else if (it.role === 'user') { block = null; out.push({ kind: 'user', text: it.text, ts: it.ts, via: it.via, midRun: !!it.midRun }); }
     else {
       if (!block) { block = { kind: 'assistant', parts: [] }; out.push(block); }
       if (it.ts) block.ts = it.ts;
@@ -520,8 +520,8 @@ function blockNode(b) {
     if (rel) w.append(relayFrom(rel));
     const m = el('div', 'msg user', text.length > 6000 ? text.slice(0, 6000) + '\n...' : text); m.dataset.fit = '';
     w.append(m);
-    const via = rel ? '' : b.via; // a message from another chat says so above it, not "sent from headless"
-    if (b.ts || via) w.append(el('div', 'stamp', [b.ts ? when(b.ts) : '', via ? 'sent from ' + via : ''].filter(Boolean).join(', ')));
+    const via = rel || b.midRun ? '' : b.via; // a message from another chat says so above it, not "sent from headless"
+    if (b.ts || via || b.midRun) w.append(el('div', 'stamp', [b.ts ? when(b.ts) : '', b.midRun ? 'sent while it worked' : via ? 'sent from ' + via : ''].filter(Boolean).join(', ')));
     return w;
   }
   const box = el('div', 'msg assistant blk'); box.dataset.fit = '';
@@ -615,12 +615,31 @@ function queueNodes(k) { // your messages (and other chats') waiting for this ch
     const x = el('button', 'icon-btn q-drop'); x.type = 'button'; x.append(iconEl('close', 12));
     x.title = q.by === 'you' ? 'Take it back: it goes back in the message box' : 'Remove it: that chat is not told';
     x.onclick = async () => { x.disabled = true; const t = await M.unqueue(k, q.id); if (t && cur && cur.key === k && !input.value.trim()) { input.value = t; grow(); saveDraft(); input.focus(); } };
+    if (M.queueSendNow) { // or send it now, into the reply that is running
+      const now = el('button', 'q-now', 'Send now'); now.type = 'button';
+      now.title = cur && cur.engine === 'claude' ? 'Send it into the reply that is running: Claude reads it after the step it is on' : 'Stop this reply and send it now';
+      now.onclick = async () => { now.disabled = true; x.disabled = true; await M.queueSendNow(k, q.id); };
+      row.append(now);
+    }
     row.append(x);
     const m = el('div', 'msg user pending', rel ? rel.body : q.text); m.dataset.fit = '';
     w.append(row, m);
     out.push(w);
   }
   return out;
+}
+// Messages sent into the running reply ("Send now"), shown until the chat file has them: first "sent",
+// then "Claude has it" once Claude Code takes it (it echoes each message it takes).
+function saidNodes(k) {
+  const live = lives[k]; if (!live || live.done || live.error || !live.said || !live.said.length || !cur) return [];
+  const landed = (m) => cur.items.some((it) => it.role === 'user' && it.text.trim() === m.text.trim() && (tsOf(it) || 0) >= m.at - 2000);
+  return live.said.filter((m) => !landed(m)).map((m) => {
+    const w = el('div', 'user-wrap live-part said');
+    const b = el('div', 'msg user pending', m.text); b.dataset.fit = '';
+    w.append(b, el('div', 'stamp', m.taken ? 'Claude has it' : 'Sent: Claude reads it after the step it is on'));
+    enterOnce(w, 's:' + k + ':' + m.at, 'arrive', 500);
+    return w;
+  });
 }
 function liveNodes() {
   const k = cur && cur.key; const live = k ? lives[k] : null; const out = [];
@@ -682,7 +701,7 @@ function liveNodes() {
 const atBottom = (log) => log.scrollHeight - log.scrollTop - log.clientHeight < 160;
 function finishLog(log, stick) {
   log.querySelectorAll(':scope > .live-part, :scope > .empty-note').forEach((n) => n.remove());
-  const ln = cur ? [...liveNodes(), ...queueNodes(cur.key)] : []; for (const n of ln) log.append(n);
+  const ln = cur ? [...liveNodes(), ...saidNodes(cur.key), ...queueNodes(cur.key)] : []; for (const n of ln) log.append(n);
   if (cur && !cur.items.length && !ln.length && cur.key !== 'new') log.append(el('div', 'empty-note', cur.error ? 'Could not read this chat: ' + cur.error : 'No messages to show in this chat.'));
   if (stick || (cur && cur.justOpened)) { log.scrollTop = log.scrollHeight; if (cur) cur.justOpened = false; }
 }
@@ -812,10 +831,18 @@ function renderSend() {
   const stop = running && !typed;
   const go = $('#go'); const want = stop ? 'stop' : 'send';
   go.classList.toggle('stop', stop);
-  go.title = stop ? 'Stop' : running ? 'Queue: it goes when this reply finishes (Enter)' : 'Send (Enter)'; go.setAttribute('aria-label', stop ? 'Stop' : running ? 'Queue' : 'Send');
+  go.title = stop ? 'Stop' : running ? 'Queue: it goes when this reply finishes (Enter). Ctrl+Enter sends it now.' : 'Send (Enter)'; go.setAttribute('aria-label', stop ? 'Stop' : running ? 'Queue' : 'Send');
+  // Send now, next to it while a reply runs: into that reply (Claude), or stop it and send (Codex, Gemini)
+  const now = $('#go-now');
+  if (now) {
+    const claude = !!(cur && cur.engine === 'claude');
+    now.hidden = !(running && typed && cur && cur.key !== 'new' && M.sendNow);
+    now.textContent = claude ? 'Send now' : 'Stop and send';
+    now.title = claude ? 'Claude reads it after the step it is on, without waiting for this reply to finish (Ctrl+Enter)' : 'Stops this reply and sends yours right away (Ctrl+Enter)';
+  }
   if (go._icon !== want) { go._icon = want; go.innerHTML = icon(want, stop ? 14 : 16); }
   go.disabled = !running && !typed;
-  const ph = running ? 'Working. Type here to queue your next message...' : input.dataset.idle;
+  const ph = running ? 'Working. Enter queues your message, Ctrl+Enter sends it now...' : input.dataset.idle;
   if (ph && input.placeholder !== ph && !/^Switched account/.test(input.placeholder)) input.placeholder = ph;
 }
 const key = () => (cur ? cur.key : 'new');
@@ -839,12 +866,13 @@ const input = $('#input');
 function grow() { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, window.innerHeight * 0.4) + 'px'; renderSend(); }
 input.addEventListener('input', grow);
 input.addEventListener('input', () => saveDraft());
-input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit(); } });
+input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit({ now: e.ctrlKey || e.metaKey }); } });
+$('#go-now').addEventListener('click', () => { submit({ now: true }); input.focus(); });
 $('#composer').addEventListener('submit', (e) => {
   e.preventDefault();
   if (isRunning() && !input.value.trim() && !attachments.length) M.stop(cur.key); else submit();
 });
-function submit() {
+function submit(opts = {}) { // opts.now: while a reply runs, send into it instead of queueing
   const text = input.value.trim(); if (!text && !attachments.length) return;
   const running = isRunning();
   if (running && key() === 'new') return; // a brand-new chat takes its next message once it has its name
@@ -855,7 +883,8 @@ function submit() {
   const files = attachments.map((x) => x.path);
   attachments = []; renderAttach();
   const k = key();
-  M.send(k, text, files).then((r) => { if (r === 'refused' && cur && cur.key === k && !input.value.trim()) { input.value = text; grow(); saveDraft(); } });
+  const go = running && opts.now && M.sendNow ? M.sendNow : M.send;
+  go(k, text, files).then((r) => { if (r === 'refused' && cur && cur.key === k && !input.value.trim()) { input.value = text; grow(); saveDraft(); } });
 }
 
 // ---------- header / misc ----------

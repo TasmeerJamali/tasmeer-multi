@@ -415,6 +415,12 @@ button.relay-head:hover .relay-label { text-decoration: underline; text-underlin
 /* your messages waiting for the reply to finish (the queue) */
 .queued .q-label { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--fg-3); }
 .queued .q-drop { width: 20px; height: 20px; }
+.queued .q-label > span { min-width: 0; }
+.queued .q-now { flex: none; white-space: nowrap; height: 20px; padding: 0 6px; border: 0; border-radius: 6px; background: transparent; color: var(--fg-2); font: 500 11px var(--sans); cursor: pointer; transition: background-color 120ms, color 120ms; }
+.queued .q-now:hover:not(:disabled) { color: var(--fg); background: var(--hover); }
+.queued .q-now:disabled { opacity: .5; cursor: default; }
+/* "Send now" next to the send button while a reply runs */
+.send-now { height: 28px; padding: 0 10px; margin-left: 4px; font-size: 12.5px; flex: none; white-space: nowrap; }
 .typing { display: inline-flex; gap: 4px; padding: 4px 0; }
 .typing i { width: 5px; height: 5px; border-radius: 50%; background: var(--fg-3); animation: blink 1.2s ease-in-out infinite; }
 @keyframes blink { 0%, 80%, 100% { opacity: .25; } 40% { opacity: 1; } }

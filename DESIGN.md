@@ -259,6 +259,12 @@ new folder, unpin, a list update mid-drag, a file dropped on the sidebar; result
 18. (same day) The run's own items are found by time, with 0.25 s of slack. With 3 s, a queued message
    (sent 0.3 s after the last reply ended) pulled that reply into its own box for a moment; and "continue"
    sent twice must match the new message, not the older one with the same words.
+19. (Nov 25: a way to send without waiting in the queue) Tested on Claude Code 2.1.331 before building:
+   a message written to a running reply is read at its next step, inside the same reply; one written
+   while Claude writes its last words waits and is answered as a next turn in the same process, so the
+   run ends only once every message sent into it was taken. Such a message is saved as a
+   `queued_command` note, not a message, so the chat never showed messages typed mid-reply (here or in
+   the Claude app) until history.js read those notes.
 
 ## Sources (read Nov 24, 2026)
 
@@ -350,6 +356,14 @@ While a reply is being written, the send button is Stop until you type; then it 
 "Queue"), and Enter queues too. A queued message waits under the reply ("Queued, goes when this reply
 finishes", x takes it back into the message box) and goes the moment the chat is free. Another chat's
 waiting message reads "Waiting, from <chat>". The queue survives a restart.
+
+**Send now** (Nov 25, 2026): while a reply runs and you have typed, a "Send now" button sits left of the
+send button (Ctrl+Enter does the same), and every queued message has its own "Send now". For Claude the
+message goes into the running reply: Claude reads it after the step it is on, as the Claude app does. It
+reads "Sent" under it, then "Claude has it" (Claude Code echoes each message it takes,
+`--replay-user-messages`), and in the chat it sits where it landed, "sent while it worked". Codex and
+Gemini cannot take a message mid-reply, so there the button reads "Stop and send": the reply stops and
+your message goes first.
 
 ## Open
 

@@ -198,7 +198,7 @@
   if (state === 'run-think') Object.assign(lives['claude:desk'], { phase: 'thinking', running: [], thinking: 'The sweep found 2 PRs with no reviewer. Before drafting anything, check whether Dana already picked up #3184: read the review log for Nov 23 first, then the PR, then decide whether the nudge goes to Dana or to Lee.' });
   if (state === 'run-agent') Object.assign(lives['claude:desk'], { phase: 'tool', running: [{ name: 'Agent', detail: 'Check the 17 PRs for review comments nobody answered', id: 'run-1', at: now - 3 * MIN - 12e3 }], sub: { name: 'Grep', detail: '"changes requested" in reviews since Nov 20', id: 'sub-9' }, subSteps: 23 });
   // messages waiting for a chat to be free (yours, and another chat's)
-  const queues = state === 'chat-working' || state === 'run-think' || state === 'run-agent' ? { 'claude:desk': [
+  const queues = state === 'chat-working' || state === 'now' || state === 'run-think' || state === 'run-agent' ? { 'claude:desk': [
     { id: 'q-you', text: 'also add the release date to the page', by: 'you', from: null, at: now - 2 * MIN },
     { id: 'q-chat', text: '[Tasmeer Multi: message from the chat "Onboarding flow, three real users" (claude:g1). To answer it, use send_message to "claude:g1".]\n\nWhen the run is done, say who gets the #3184 nudge.', by: 'chat', from: { key: 'claude:g1', title: 'Onboarding flow, three real users' }, at: now - MIN },
   ] } : {};
@@ -247,7 +247,7 @@
 
   // ---------- what the app asks for ----------
   if (state === 'empty') { accounts = []; sessions = []; }
-  const START = { new: 'new', modal: 'new', empty: 'new', 'chat-working': 'claude:desk', 'run-think': 'claude:desk', 'run-agent': 'claude:desk', relay: 'claude:g1', error: 'claude:err', voice: 'antigravity:voice' }[state] || 'claude:long';
+  const START = { new: 'new', modal: 'new', empty: 'new', 'chat-working': 'claude:desk', 'run-think': 'claude:desk', 'run-agent': 'claude:desk', now: 'claude:desk', relay: 'claude:g1', error: 'claude:err', voice: 'antigravity:voice' }[state] || 'claude:long';
   let firstOpen = true; let view = null;
   function open(key) {
     if (firstOpen && key === 'new') key = START;
@@ -333,6 +333,8 @@
     onAccounts: on('accounts'), onSessions: on('sessions'), onView: on('view'), onAppend: on('append'), onPrepend: on('prepend'),
     onLive: on('live'), onPrefs: on('chat-prefs'), onAsk: on('ask'), onSelect: on('select'), onCollapsed: on('collapsed'),
     onCommands: on('commands'), onUsageDone: on('usage-done'), onOrg: on('org'), onQueue: on('queue'),
+    sendNow: (k, t) => { const l = lives[k]; if (l && !l.done) { l.said = [...(l.said || []), { text: t, at: Date.now(), taken: false }]; (window.__sentNow ||= []).push(t); emit('live', { key: k, live: { ...l } }); return Promise.resolve('sent-now'); } return window.multi.send(k, t); },
+    queueSendNow: (k, id) => { const q = queues[k] || []; const i = q.findIndex((x) => x.id === id); if (i < 0) return Promise.resolve(null); const [it] = q.splice(i, 1); emit('queue', { key: k, items: q.slice() }); return window.multi.sendNow(k, it.text); },
     unqueue: (key, id) => { const q = queues[key] || []; const i = q.findIndex((x) => x.id === id); if (i < 0) return Promise.resolve(null); const [it] = q.splice(i, 1); emit('queue', { key, items: q.slice() }); (window.__unqueued ||= []).push(id); return Promise.resolve(it.by === 'you' ? it.text : ''); },
     refreshUsage: async () => { await wait(1200); for (const a of accounts) if (a.usage) a.usage = { ...a.usage, at: Date.now(), failedAt: undefined }; emit('accounts', { accounts }); emit('usage-done', true); },
     commands: () => Promise.resolve(commands),
@@ -364,6 +366,7 @@
   }
   const STEPS = {
     slash: () => typeInto('/un', 10),
+    now: () => typeInto('also add the release date to the page', 5), // a reply runs and you type: Send now shows
     menu: () => $('.acct-pick .dd-btn')?.click(),
     modal: () => $('#add-acct')?.click(),
     voice: () => $('#input')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })),
@@ -432,6 +435,36 @@
       document.querySelector('#log .queued .q-drop')?.click(); await wait(250);
       r.takenBack = inp.value; r.queueGone = !document.querySelector('#log .queued');
       window.__liveResult = r; console.log('LIVE ' + JSON.stringify(r));
+    },
+    // "Send now": the button shows only while a reply runs and something is typed; Ctrl+Enter sends into
+    // the reply; the message reads "sent" until Claude takes it, then "Claude has it", and once the chat
+    // file has it, it sits in the chat as "sent while it worked". A queued message can be sent now too.
+    'now-test': async () => {
+      const r = {}; const key = 'claude:long'; const T = () => new Date().toISOString();
+      const btn = () => $('#go-now'); const inp = $('#input');
+      const st = { name: 'Bash', detail: 'npm test', id: 'n1', at: Date.now() };
+      lives[key] = { user: 'run the tests', text: '', phase: 'tool', running: [st], step: st, steps: 1, account: 'main@example.com', startedAt: Date.now(), said: [] };
+      emit('append', { key, items: [{ role: 'user', text: 'run the tests', ts: T(), via: 'Tasmeer Multi' }] });
+      emit('live', { key, live: { ...lives[key] } }); await wait(150);
+      r.hiddenWhenEmpty = btn().hidden;
+      inp.value = 'also check the light theme'; inp.dispatchEvent(new Event('input', { bubbles: true })); await wait(50);
+      r.shownWhenTyped = !btn().hidden; r.label = btn().textContent;
+      inp.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true })); await wait(200);
+      r.sentIntoReply = (window.__sentNow || [])[0]; r.boxCleared = inp.value === '';
+      r.sentLabel = document.querySelector('#log .said .stamp')?.textContent;
+      lives[key] = { ...lives[key], said: lives[key].said.map((m) => ({ ...m, taken: true })) }; emit('live', { key, live: { ...lives[key] } }); await wait(150);
+      r.takenLabel = document.querySelector('#log .said .stamp')?.textContent;
+      emit('append', { key, items: [{ role: 'user', text: 'also check the light theme', ts: T(), via: '', midRun: true }] }); await wait(200);
+      r.pendingGone = !document.querySelector('#log .said');
+      const stamps = [...document.querySelectorAll('#log .user-wrap .stamp')].map((x) => x.textContent);
+      r.inTheChat = stamps.some((x) => /sent while it worked/.test(x));
+      r.boxBelowIt = !!document.querySelector('#log > .msg.assistant.live') && [...document.querySelectorAll('#log > *')].indexOf(document.querySelector('#log > .msg.assistant.live')) > [...document.querySelectorAll('#log > .user-wrap')].findIndex((x) => /also check the light theme/.test(x.textContent));
+      inp.value = 'and the narrow window'; inp.dispatchEvent(new Event('input', { bubbles: true }));
+      inp.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); await wait(200);
+      r.queuedWithButton = !!document.querySelector('#log .queued .q-now');
+      document.querySelector('#log .queued .q-now')?.click(); await wait(200);
+      r.queuedSentNow = (window.__sentNow || [])[1]; r.queueEmpty = !document.querySelector('#log .queued');
+      window.__nowResult = r; console.log('NOW ' + JSON.stringify(r));
     },
     // what a run asks you: one click answers one question; several questions, a typed answer that
     // survives a redraw, and a permission denied with a reason

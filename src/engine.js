@@ -145,7 +145,9 @@ function run(root, { acct, chat, prompt }, on) {
   let args; let exe;
   if (acct.engine === 'claude') {
     exe = 'claude';
-    args = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--input-format', 'stream-json', '--permission-prompt-tool', 'stdio', ...MODES.claude[chat.mode || 'edit']];
+    // --replay-user-messages: Claude Code echoes each message from this app the moment it takes it, which is
+    // how a message sent into a running reply ("Send now") is known to have reached Claude.
+    args = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--input-format', 'stream-json', '--replay-user-messages', '--permission-prompt-tool', 'stdio', ...MODES.claude[chat.mode || 'edit']];
     const model = chat.model || defaultClaudeModel(root, acct);
     if (model) args.push('--model', model);
     const effort = chat.effort || defaultClaudeEffort(root, acct);
@@ -175,11 +177,18 @@ function run(root, { acct, chat, prompt }, on) {
   const child = spawn(exe, args, { cwd, env, shell: true, windowsHide: true });
   const twoWay = acct.engine === 'claude';
   const write = (m) => { try { if (child.stdin.writable) { child.stdin.write(JSON.stringify(m) + '\n'); return true; } } catch { /* closed */ } return false; };
-  const endInput = () => { try { child.stdin.end(); } catch { /* closed */ } };
+  let inputEnded = false;
+  const endInput = () => { inputEnded = true; try { child.stdin.end(); } catch { /* closed */ } };
   if (twoWay) write({ type: 'user', session_id: '', message: { role: 'user', content: prompt }, parent_tool_use_id: null });
   else child.stdin.end(prompt);
 
   let buf = ''; let errText = ''; let finished = false; let partial = ''; let thinking = '';
+  // Messages sent into the running reply, and how many Claude has taken (each is echoed when taken; the
+  // first echo is the run's own message). Tested Nov 25, 2026, Claude Code 2.1.331: a message written while
+  // a step runs is read at the next step, inside the same reply; one written while Claude writes its last
+  // words waits, and Claude answers it as a next turn in the same process. So the run ends only when
+  // every message sent into it has been taken and answered.
+  let says = 0; let taken = 0; let echoes = 0;
   const finish = (e) => {
     if (finished) return; finished = true;
     if (e && e.error && /unknown option.*thinking-display/i.test(e.error + errText)) { thinkingDisplayOk = false; e.error = `This Claude Code is older than Tasmeer Multi expects (it does not know --thinking-display), so ${NOT_SENT}. Send again: the next run goes without thinking words.`; }
@@ -209,6 +218,8 @@ function run(root, { acct, chat, prompt }, on) {
         if (c.type === 'text' && c.text && !sub) { on({ kind: 'text', text: c.text }); partial = ''; }
         if (c.type === 'tool_use') on({ kind: 'tool', name: c.name, detail: toolDetail(c.input), id: c.id || '', sub });
       }
+    } else if (m.type === 'user' && m.isReplay) { // Claude took a message from this app
+      echoes += 1; if (echoes > 1) { taken += 1; on({ kind: 'said' }); }
     } else if (m.type === 'user') { // results coming back: a step finished
       const sub = m.parent_tool_use_id || null; const content = m.message?.content;
       if (Array.isArray(content)) for (const c of content) if (c && c.type === 'tool_result') on({ kind: 'tool-done', id: c.tool_use_id || '', sub });
@@ -221,6 +232,7 @@ function run(root, { acct, chat, prompt }, on) {
     } else if (m.type === 'control_cancel_request') {
       on({ kind: 'ask-cancel', id: m.request_id });
     } else if (m.type === 'result') {
+      if (taken < says && !m.is_error) { on({ kind: 'turn-end' }); return; } // a message sent late is answered next, in this same run
       finish({ error: m.is_error ? (m.result || m.subtype) : null, cost: m.total_cost_usd });
       endInput(); // the turn is over: closing input lets Claude Code exit
     }
@@ -261,6 +273,8 @@ function run(root, { acct, chat, prompt }, on) {
     // Your answer to a question, a permission prompt or a plan: { behavior: 'allow', updatedInput } or
     // { behavior: 'deny', message }.
     answer: (id, response) => twoWay && write({ type: 'control_response', response: { subtype: 'success', request_id: id, response } }),
+    // A message into the reply that is running now (Claude only): false when it can no longer take one.
+    say: twoWay ? (text) => { if (finished || inputEnded) return false; const ok = write({ type: 'user', session_id: '', message: { role: 'user', content: String(text) }, parent_tool_use_id: null }); if (ok) says += 1; return ok; } : undefined,
     stop() {
       // Claude: ask it to stop the turn (it records the interruption), then close input; force only if it lingers.
       if (twoWay && child.exitCode === null && write({ type: 'control_request', request_id: 'stop-' + Date.now(), request: { subtype: 'interrupt' } })) {

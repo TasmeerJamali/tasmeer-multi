@@ -479,10 +479,14 @@ ipcMain.handle('save-attachment', (_e, name, bytes) => {
 const procs = new Map(); // chat key -> the last process started for it (may outlive its reply)
 // You typed a message: it goes now, or, while the chat is still working, it waits its turn (the Claude
 // app's queue) and goes the moment the chat is free.
-ipcMain.handle('send', (_e, key, text, files) => {
+function promptOf(text, files) { // your words, plus the paths of anything you attached
   const paths = (Array.isArray(files) ? files : []).filter((f) => typeof f === 'string' && fs.existsSync(f)).slice(0, 20);
   let prompt = String(text || '').trim();
   if (paths.length) prompt = (prompt || 'Look at the attached file' + (paths.length > 1 ? 's' : '') + '.') + '\n\nAttached file' + (paths.length > 1 ? 's' : '') + ' (open from these paths):\n' + paths.map((f) => '- ' + f).join('\n');
+  return prompt;
+}
+ipcMain.handle('send', (_e, key, text, files) => {
+  const prompt = promptOf(text, files);
   if (!prompt) return;
   if (runs.has(key) || queueOf(key).length) {
     if (key === 'new') return;
@@ -491,6 +495,34 @@ ipcMain.handle('send', (_e, key, text, files) => {
   }
   startRun(key, prompt);
   return 'sent';
+});
+// "Send now": the message goes into the reply that is running, instead of waiting for it to finish.
+// Claude reads it after the step it is on (the Claude app does the same). Codex and Gemini cannot take a
+// message mid-reply: their reply stops, and this message goes first.
+function sayNow(key, entry, prompt) {
+  if (entry.handle && entry.handle.say && !entry.done && entry.handle.say(prompt)) {
+    entry.live.said = [...(entry.live.said || []), { text: prompt, at: Date.now(), taken: false }].slice(-10);
+    pushLive(key); return 'sent-now';
+  }
+  if (!prefs.queue) prefs.queue = {};
+  (prefs.queue[key] = prefs.queue[key] || []).unshift({ id: newId(), at: Date.now(), by: 'you', prompt, from: null, hop: 0, reportBack: false, message: '' });
+  savePrefs(); pushQueue(key);
+  if (!entry.done) entry.handle?.stop();
+  return 'stopping';
+}
+ipcMain.handle('send-now', (_e, key, text, files) => {
+  const prompt = promptOf(text, files); if (!prompt) return;
+  const r = runs.get(key);
+  if (!r) { if (queueOf(key).length) { const q = enqueue(key, { prompt, by: 'you', hop: 0 }); return q.error ? 'refused' : 'queued'; } startRun(key, prompt); return 'sent'; }
+  return sayNow(key, r, prompt);
+});
+ipcMain.handle('queue-send-now', (_e, key, id) => { // a waiting message goes now
+  const q = queueOf(key); const i = q.findIndex((x) => x.id === id); if (i < 0) return null;
+  const [it] = q.splice(i, 1); if (!q.length && prefs.queue) delete prefs.queue[key];
+  savePrefs(); pushQueue(key);
+  const r = runs.get(key);
+  if (!r) { const st = startRun(key, it.prompt, it); return st.error ? 'refused' : 'sent'; }
+  return sayNow(key, r, it.prompt);
 });
 ipcMain.handle('unqueue', (_e, key, id) => { // take back a message that is still waiting
   const q = queueOf(key); const i = q.findIndex((x) => x.id === id); if (i < 0) return null;
@@ -515,7 +547,7 @@ function startRun(key, prompt, opts = {}) {
   const acct = getAcct(p.accountId); if (!acct) return { error: 'No account is set for this chat.' };
   // phase / step / running / steps let the window say what a long run is doing right now
   // ("Running Bash: node ...", "Thinking", 31m, 112 steps), and `from` who sent it when it was another chat.
-  const live = { user: prompt, text: '', thinking: '', phase: 'starting', prep: '', account: label(acct), error: null, suggest: null, startedAt: Date.now(), step: null, running: [], sub: null, steps: 0, subSteps: 0, from: opts.from ? { key: opts.from.key, title: opts.from.title } : null };
+  const live = { user: prompt, text: '', thinking: '', phase: 'starting', prep: '', account: label(acct), error: null, suggest: null, startedAt: Date.now(), step: null, running: [], sub: null, steps: 0, subSteps: 0, said: [], from: opts.from ? { key: opts.from.key, title: opts.from.title } : null };
   const fail = (msg) => { live.error = msg; runs.set(key, { live, handle: null, key }); pushLive(key); runs.delete(key); return { error: msg }; };
   if (s && s.legacyPb) return fail('This older Antigravity chat can only be continued in Antigravity itself.');
   if (!engine.isSignedIn(root(), acct)) return fail(`${label(acct)} is not signed in yet. Right-click it under Accounts and choose "Sign in".`);
@@ -550,6 +582,8 @@ function onRunEvent(entry, ev) {
   }
   if (ev.kind === 'ask-cancel') { if (live.ask && live.ask.id === ev.id) { live.ask = null; pushLive(entry.key); pushSessions(); } return; }
   if (ev.kind === 'done') { finishRun(entry, ev); return; }
+  if (ev.kind === 'said') { const m = (live.said || []).find((x) => !x.taken); if (m) m.taken = true; pushLive(entry.key); return; } // Claude took a message sent into this reply
+  if (ev.kind === 'turn-end') { live.phase = 'thinking'; pushLive(entry.key); return; } // it answered; a message sent late comes next
   if (ev.kind === 'thinking') { live.phase = 'thinking'; live.thinking = String(ev.text || ''); pushLiveSoon(entry); return; }
   if (ev.kind === 'text') {
     if (ev.partial) { live.text = ev.text; live.phase = 'writing'; pushLiveSoon(entry); return; }
