@@ -98,6 +98,15 @@ function toolItem(c, ts) {
   if (c.name === 'mcp__tasmeer_multi__read_chat') return { role: 'tool', name: 'Read chat', detail: String(inp.chat || ''), ts, id: c.id || '' };
   return { role: 'tool', name: c.name, detail: toolDetail(inp), ts, id: c.id || '' };
 }
+// A background agent's or command's "finished" notice, as one line: Claude Code's own summary
+// ('Agent "Check the PRs" finished', 'Background command "npm test" completed (exit code 0)').
+function taskNote(t, ts) {
+  const pick = (tag) => ((new RegExp('<' + tag + '>([\\s\\S]*?)</' + tag + '>').exec(t) || [])[1] || '').trim();
+  const sum = pick('summary'); const status = pick('status');
+  let text = sum ? clip(sum.replace(/\s+/g, ' '), 200) : 'A background task finished and reported back';
+  if (status && !/^completed$/i.test(status) && !text.toLowerCase().includes(status.toLowerCase())) text += ' (' + clip(status, 40) + ')';
+  return { role: 'note', text, ts, task: true };
+}
 const resultText = (x) => (typeof x.content === 'string' ? x.content : Array.isArray(x.content) ? x.content.map((y) => y.text || '').join('') : '');
 // Your answer to AskUserQuestion comes back as its tool result: "...answered: "Q"="A", "Q2"="B"..."
 function answeredItem(content, ts) {
@@ -122,13 +131,20 @@ function normalize(engine, e) {
     // A message you sent while a reply was running ("Send now" here, or typing while it works in the Claude
     // app) is saved as a queued_command note, not as a message; without this it never showed (Nov 25, 2026).
     if (e.type === 'attachment' && e.attachment && e.attachment.type === 'queued_command') {
-      const p = e.attachment.prompt;
+      const a = e.attachment; const p = a.prompt;
       const t = typeof p === 'string' ? p : Array.isArray(p) ? p.filter((x) => x && x.type === 'text').map((x) => x.text).join('\n') : '';
-      if (t && t.trim()) out.push({ role: 'user', text: t, ts, via: '', midRun: true });
+      if (!t || !t.trim()) return out;
+      const from = (a.origin && a.origin.kind) || '';
+      // Claude Code's own "a background agent or command finished" notice travels the same way. Not your
+      // words: a small note naming it, as the Claude app shows it (the full result went to Claude).
+      if (a.commandMode === 'task-notification' || from === 'task-notification' || /^\s*<task-notification>/.test(t)) { out.push(taskNote(t, ts)); return out; }
+      // a message another Claude session sent this one (the Claude app's SendMessage), not you
+      if (from === 'peer' || /^\s*<cross-session-message/.test(t)) { out.push({ role: 'note', text: 'A message from another Claude session' + (a.origin && a.origin.name ? `, "${clip(a.origin.name, 80)}"` : ''), ts }); return out; }
+      out.push({ role: 'user', text: t, ts, via: '', midRun: true });
       return out;
     }
     if (e.type === 'user' && e.message && (e.isCompactSummary || e.isVisibleInTranscriptOnly)) { out.push({ role: 'note', text: 'Claude Code summarized the earlier conversation here (the chat got long)', ts }); return out; }
-    if (e.type === 'user' && e.message && (e.promptSource === 'system' || e.turnOrigin === 'task_notification' || /^\s*<task-notification>/.test(claudeText(e.message.content)))) { out.push({ role: 'note', text: 'A background task finished and reported back', ts }); return out; }
+    if (e.type === 'user' && e.message && (e.promptSource === 'system' || e.turnOrigin === 'task_notification' || /^\s*<task-notification>/.test(claudeText(e.message.content)))) { const tx = claudeText(e.message.content); out.push(/^\s*<task-notification>/.test(tx) ? taskNote(tx, ts) : { role: 'note', text: 'A background task finished and reported back', ts }); return out; }
     if (e.type === 'user' && e.message) {
       const c = e.message.content;
       const ans = answeredItem(c, ts); if (ans) { out.push(ans); return out; }
