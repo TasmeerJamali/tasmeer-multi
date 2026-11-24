@@ -46,11 +46,14 @@ function codexText(content) {
   return content.map((c) => c.text || '').join('');
 }
 function clip(s, n) { s = String(s || '').replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1) + '...' : s; }
+// run_agent's tasks on its step line: "3 tasks: fix the upload test | fix the avatar test | ..."
+const tasksDetail = (tasks) => `${tasks.length} task${tasks.length === 1 ? '' : 's'}: ` + tasks.map((t) => String((typeof t === 'string' ? t : t && t.task) || '').replace(/\s+/g, ' ').trim()).filter(Boolean).join(' | ');
 function toolDetail(input) {
   if (input == null) return '';
   if (typeof input === 'string') { try { input = JSON.parse(input); } catch { return clip(input, 160); } }
-  const v = input.command || input.cmd || input.file_path || input.path || input.pattern || input.url || input.query || input.description || input.prompt || '';
-  return clip(Array.isArray(v) ? v.join(' ') : v, 160);
+  const many = Array.isArray(input.tasks) && input.tasks.length;
+  const v = input.command || input.cmd || input.file_path || input.path || input.pattern || input.url || input.query || input.description || input.prompt || input.task || (many ? tasksDetail(input.tasks) : '');
+  return clip(Array.isArray(v) ? v.join(' ') : v, many ? 400 : 160);
 }
 
 // Your words for a title: drop wrapper blocks that tools put in front of a message, keep pasted text.

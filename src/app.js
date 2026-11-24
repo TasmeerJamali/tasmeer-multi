@@ -605,10 +605,21 @@ function activityNodes(live) {
   if (ph === 'tool' && run.length) {
     const st = run[0];
     a.append(el('span', 'act-verb', 'Running'), el('span', 'act-name', niceTool(st.name)));
-    if (st.detail) { const d = el('span', 'act-detail', midClip(st.detail, 90)); d.title = st.detail; a.append(d); }
+    const hs = (live.helpers || []).filter(Boolean); // run_agent's helpers: one line each, below
+    const det = hs.length > 1 ? `${hs.length} helpers side by side` : st.detail;
+    if (det) { const d = el('span', 'act-detail', midClip(det, 90)); d.title = st.detail || det; a.append(d); }
     if (run.length > 1) a.append(el('span', 'act-more', `+${run.length - 1} more`));
     const tm = el('span', 'act-time'); tm.dataset.since = String(st.at || Date.now()); tm.textContent = Date.now() - st.at >= 3000 ? runClock(Date.now() - st.at) : ''; a.append(tm);
-    if (live.sub && !live.sub.done) { // a helper agent's own step, under its Agent step
+    for (const h of hs) { // a helper from run_agent: who, its task, and the step it is on (or done)
+      const s = el('div', 'activity sub helper' + (h.done ? ' done' : ''));
+      s.append(el('span', 'act-hook', '↳'), el('span', 'act-name', h.who));
+      const t = el('span', 'act-task', h.task); t.title = h.task; s.append(t);
+      const now = h.done ? (h.error ? 'stopped' : `done, ${h.steps} step${h.steps === 1 ? '' : 's'}`) : h.step ? niceTool(h.step) : 'starting';
+      s.append(el('span', 'act-more', now));
+      if (!h.done && h.detail) { const d = el('span', 'act-detail', midClip(h.detail, 56)); d.title = h.detail; s.append(d); }
+      out.push(s);
+    }
+    if (!hs.length && live.sub && !live.sub.done) { // a helper agent's own step, under its Agent step
       const s = el('div', 'activity sub'); s.append(el('span', 'act-hook', '↳'), el('span', 'act-name', niceTool(live.sub.name)));
       if (live.sub.detail) { const d = el('span', 'act-detail', midClip(live.sub.detail, 80)); d.title = live.sub.detail; s.append(d); }
       if (live.subSteps > 1) s.append(el('span', 'act-more', `${live.subSteps} steps inside`));

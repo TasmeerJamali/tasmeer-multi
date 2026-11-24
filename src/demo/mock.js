@@ -55,6 +55,7 @@
   let sessions = [
     S('claude:desk', 'Release checklist, morning run (backend first, then the web app)', 20e3, HOME + '\\code\\ops', { running: true }),
     S('mixed:demo', 'Fix the flaky upload test, then review the fix', 90e3, HOME + '\\code\\shop-api', { engines: ['claude', 'codex'] }),
+    S('claude:team', 'Three failing tests, one GPT helper each', 5 * DAY, HOME + '\\code\\shop-api'),
     S('claude:long', 'Unslop the Tasmeer Multi window: one signature, springs, every state', 3 * MIN, HOME + '\\tasmeer-multi'),
     S('codex:mail', 'Fix the upload path on Windows', 12 * MIN, HOME + '\\code\\mailer', { done: true }),
     S('antigravity:voice', 'Most Powerful Gemini Model', 47 * MIN, HOME + '\\code\\ops'),
@@ -155,6 +156,15 @@
       ...tools([['Grep', '"reviewer" in PRs since Nov 20'], ['Read', 'PR 3184 description']], 11 * MIN, 30e3),
       { role: 'tool', name: 'Bash', detail: 'node scripts/orphan-sweep.cjs --prs 17 --since "Nov 23, 9:00 AM"', ts: iso(47e3), id: 'run-1' },
     ],
+    'claude:team': [
+      { role: 'user', text: 'run the test suite on main', ts: iso(9 * MIN), via: 'Tasmeer Multi' },
+      ...tools([['Bash', 'npm test 2>&1 | tail -40']], 8.9 * MIN, 20e3),
+      { role: 'assistant', text: '3 of 214 tests fail on main: `upload`, `avatar` and `banner`. Each one fails in its own file.', ts: iso(8 * MIN), model: 'claude-opus-5-5' },
+      { role: 'user', text: 'Give each failing test to its own GPT helper at the same time, then check their fixes and run the whole suite again.', ts: iso(2.3 * MIN), via: 'Tasmeer Multi' },
+      { role: 'thinking', text: 'Three failures in three different files, so the fixes cannot collide. One task each, in a single run_agent call so the helpers work side by side.', ts: iso(2.25 * MIN) },
+      { role: 'tool', name: 'Read', detail: HOME + '\\code\\shop-api\\test\\banner.test.js', ts: iso(2.1 * MIN), id: 'tm-2' },
+      { role: 'tool', name: 'mcp__tasmeer_multi__run_agent', detail: '3 tasks: Fix the failing upload test (test/upload.test.js) and say what caused it | Fix the failing avatar test (test/avatar.test.js) and say what caused it | Fix the failing promo banner test (test/banner.test.js) and say what caused it', ts: iso(80e3), id: 'run-h' },
+    ],
     'mixed:demo': [
       { role: 'user', text: 'The upload test fails about one run in five. Find out why and fix it.', ts: iso(26 * MIN), via: 'Tasmeer Multi' },
       { role: 'thinking', text: 'A test that fails one run in five usually races something. Read the test first, then the upload handler.', ts: iso(25.9 * MIN), who: { engine: 'claude', account: 'main@example.com', model: 'claude-opus-5-5' } },
@@ -212,6 +222,18 @@
       error: 'Claude usage limit reached. Your limit resets at 4:30 PM (Europe/London). Switch to another account to keep going in this same chat.' },
   };
   if (state === 'run-think') Object.assign(lives['claude:desk'], { phase: 'thinking', running: [], thinking: 'The sweep found 2 PRs with no reviewer. Before drafting anything, check whether Dana already picked up #3184: read the review log for Nov 23 first, then the PR, then decide whether the nudge goes to Dana or to Lee.' });
+  if (state === 'helpers') {
+    Object.assign(sessions.find((x) => x.key === 'claude:team'), { running: true, updated: now - 5e3 });
+    lives['claude:team'] = { user: 'Give each failing test to its own GPT helper at the same time, then check their fixes and run the whole suite again.', text: '', thinking: '', phase: 'tool', account: 'main@example.com', engine: 'claude', error: null, suggest: null,
+      startedAt: now - 2.3 * MIN, steps: 3, subSteps: 0, sub: null,
+      helpers: [
+        { who: 'GPT 1/3', task: 'Fix the failing upload test (test/upload.test.js) and say what caused it', step: '', detail: '', steps: 4, done: true, error: false },
+        { who: 'GPT 2/3', task: 'Fix the failing avatar test (test/avatar.test.js) and say what caused it', step: 'Shell', detail: 'npm test -- test/avatar.test.js --repeat 20', steps: 3, done: false, error: false },
+        { who: 'GPT 3/3', task: 'Fix the failing promo banner test (test/banner.test.js) and say what caused it', step: 'Edit', detail: 'src/banner.js', steps: 2, done: false, error: false },
+      ],
+      step: { name: 'mcp__tasmeer_multi__run_agent', detail: '3 tasks: Fix the failing upload test (test/upload.test.js) and say what caused it | Fix the failing avatar test (test/avatar.test.js) and say what caused it | Fix the failing promo banner test (test/banner.test.js) and say what caused it', id: 'run-h', at: now - 80e3 },
+      running: [{ name: 'mcp__tasmeer_multi__run_agent', detail: '3 tasks: Fix the failing upload test (test/upload.test.js) and say what caused it | Fix the failing avatar test (test/avatar.test.js) and say what caused it | Fix the failing promo banner test (test/banner.test.js) and say what caused it', id: 'run-h', at: now - 80e3 }] };
+  }
   if (state === 'run-agent') Object.assign(lives['claude:desk'], { phase: 'tool', running: [{ name: 'Agent', detail: 'Check the 17 PRs for review comments nobody answered', id: 'run-1', at: now - 3 * MIN - 12e3 }], sub: { name: 'Grep', detail: '"changes requested" in reviews since Nov 20', id: 'sub-9' }, subSteps: 23 });
   // messages waiting for a chat to be free (yours, and another chat's)
   const queues = state === 'chat-working' || state === 'now' || state === 'run-think' || state === 'run-agent' ? { 'claude:desk': [
@@ -264,7 +286,7 @@
 
   // ---------- what the app asks for ----------
   if (state === 'empty') { accounts = []; sessions = []; }
-  const START = { mixed: 'mixed:demo', 'mixed-menu': 'mixed:demo', 'mixed-test': 'mixed:demo', new: 'new', modal: 'new', empty: 'new', 'chat-working': 'claude:desk', 'run-think': 'claude:desk', 'run-agent': 'claude:desk', now: 'claude:desk', relay: 'claude:g1', error: 'claude:err', voice: 'antigravity:voice' }[state] || 'claude:long';
+  const START = { helpers: 'claude:team', mixed: 'mixed:demo', 'mixed-menu': 'mixed:demo', 'mixed-test': 'mixed:demo', new: 'new', modal: 'new', empty: 'new', 'chat-working': 'claude:desk', 'run-think': 'claude:desk', 'run-agent': 'claude:desk', now: 'claude:desk', relay: 'claude:g1', error: 'claude:err', voice: 'antigravity:voice' }[state] || 'claude:long';
   let firstOpen = true; let view = null;
   function open(key) {
     if (firstOpen && key === 'new') key = START;

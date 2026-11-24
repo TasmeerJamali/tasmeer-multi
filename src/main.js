@@ -969,15 +969,17 @@ function planHelper(entry, args) {
   const chat = { cwd: entry.cwd, mode, model: String(args.model || '').replace(/[^\w.:\-[\]]/g, ''), sessionId: null, chrome: false, effort: '', ephemeral: true };
   return { task, eng, acct, mode, chat, name: eng === 'codex' ? 'GPT' : 'Claude' };
 }
-// Runs one planned helper; resolves { text } or { error }, never rejects. tag = { i, n } when it is one of several.
-function runHelper(entry, p, tag) {
+// Runs one planned helper; resolves { text } or { error }, never rejects. tag = { i, n } when it is one of several;
+// slot = its line in the live run (entry.live.helpers), kept current as it works.
+function runHelper(entry, p, tag, slot) {
   const t0 = Date.now(); const steps = []; let reply = ''; let model = p.chat.model;
   const who = p.name + (tag ? ` ${tag.i + 1}/${tag.n}` : ''); // "GPT 2/3" on the live line while several work
   return new Promise((resolve) => {
     let h = null;
     const done = (out) => {
       helpers.delete(h); if (entry.helpers) entry.helpers.delete(h);
-      if (!entry.done && !(entry.helpers && entry.helpers.size)) { entry.live.sub = null; pushLive(entry.key); } // the others may still be working
+      if (slot) { slot.done = true; slot.error = !!out.error; slot.steps = steps.length; slot.step = ''; slot.detail = ''; }
+      if (!entry.done) pushLiveSoon(entry);
       resolve(out);
     };
     try {
@@ -985,7 +987,8 @@ function runHelper(entry, p, tag) {
         if (ev.kind === 'model') model = ev.model;
         else if (ev.kind === 'tool' && !ev.sub) {
           steps.push((ev.name + ' ' + String(ev.detail || '').slice(0, 80)).trim()); reply = '';
-          if (!entry.done) { entry.live.sub = { name: who + ': ' + ev.name, detail: String(ev.detail || '').slice(0, 160), id: '', at: Date.now() }; entry.live.subSteps = (entry.live.subSteps || 0) + 1; pushLiveSoon(entry); }
+          if (slot) { slot.step = ev.name; slot.detail = String(ev.detail || '').slice(0, 160); slot.steps = steps.length; }
+          if (!entry.done) pushLiveSoon(entry);
         } else if (ev.kind === 'text' && !ev.partial) reply = reply ? reply + '\n\n' + ev.text : String(ev.text || '');
         else if (ev.kind === 'done') {
           const head = `[Tasmeer Multi helper${tag ? ' ' + (tag.i + 1) + ' of ' + tag.n : ''}: ${p.name}${model ? ' (' + model + ')' : ''} on ${label(p.acct)}, ${steps.length} step${steps.length === 1 ? '' : 's'}, ${fmtSecs(Date.now() - t0)}${p.mode === 'ask' ? ', read-only' : ''}]`;
@@ -1008,7 +1011,11 @@ async function runAgentTool(entry, args) {
   const bad = plans.findIndex((p) => p.error);
   if (bad >= 0) return { error: (plans.length > 1 ? `Task ${bad + 1}: ` : '') + plans[bad].error + (plans.length > 1 ? ' Nothing was started.' : '') };
   if (helpers.size + plans.length > 3) return { error: helpers.size ? `${helpers.size} helper${helpers.size === 1 ? ' is' : 's are'} already working, and at most three run at once. Wait for one to finish, or send fewer.` : 'At most three helpers at once.' };
-  const outs = await Promise.all(plans.map((p, i) => runHelper(entry, p, plans.length > 1 ? { i, n: plans.length } : null)));
+  // their lines in the live run, in order, from the start ("GPT 2/3 · its task · the step it is on")
+  const slots = plans.map((p, i) => ({ who: p.name + (plans.length > 1 ? ` ${i + 1}/${plans.length}` : ''), task: p.task.replace(/\s+/g, ' ').slice(0, 300), step: '', detail: '', steps: 0, done: false, error: false }));
+  if (!entry.done) { entry.live.helpers = slots; pushLive(entry.key); }
+  const outs = await Promise.all(plans.map((p, i) => runHelper(entry, p, plans.length > 1 ? { i, n: plans.length } : null, slots[i])));
+  if (entry.live.helpers === slots) { entry.live.helpers = null; if (!entry.done) pushLive(entry.key); } // Claude reads their answers now
   if (outs.length === 1) return outs[0];
   const text = outs.map((o) => o.text || o.error).join('\n\n----------\n\n');
   return outs.every((o) => o.error) ? { error: text } : { text };

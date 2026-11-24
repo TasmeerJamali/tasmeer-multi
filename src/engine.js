@@ -383,9 +383,11 @@ function pickCodexModel(root, acct, skip, m) {
 function codexDefaultModel(root, acct, skip = new Set()) {
   try { return pickCodexModel(root, acct, skip, accountModels(root, acct)); } catch { return ''; }
 }
+// run_agent's tasks on its step line: "3 tasks: fix the upload test | fix the avatar test | ..."
+const tasksDetail = (tasks) => `${tasks.length} task${tasks.length === 1 ? '' : 's'}: ` + tasks.map((t) => String((typeof t === 'string' ? t : t && t.task) || '').replace(/\s+/g, ' ').trim()).filter(Boolean).join(' | ');
 function toolDetail(input = {}) {
-  const v = input.command || input.file_path || input.path || input.pattern || input.url || input.query || input.description || '';
-  return String(v).slice(0, 200);
+  const v = input.command || input.file_path || input.path || input.pattern || input.url || input.query || input.description || input.task || (Array.isArray(input.tasks) && input.tasks.length ? tasksDetail(input.tasks) : '');
+  return String(v).slice(0, Array.isArray(input.tasks) ? 400 : 200);
 }
 // Errors the app knows, in plain words (the raw text stays in `detail`, shown on hover).
 // Codex lets one program write to a chat at a time; when the Codex app has the chat open, a send from

@@ -12,7 +12,7 @@ const STATES = [ // [state, width, height]
   ['menu', 1280, 860], ['modal', 1280, 860], ['empty', 1280, 860], ['narrow', 720, 860], ['voice', 1280, 860],
   ['error', 1280, 860], ['attach', 1280, 860], ['hidden', 1280, 860], ['tucked', 1280, 860], ['fold', 1280, 860],
   ['accounts', 1280, 860], ['dnd', 1280, 860], ['ask', 1280, 860], ['perm', 1280, 860], ['plan', 1280, 860], ['files', 1280, 860],
-  ['run-think', 1280, 860], ['run-agent', 1280, 860], ['relay', 1280, 860], ['now', 720, 860], ['mixed', 1280, 860], ['mixed-menu', 1280, 860],
+  ['run-think', 1280, 860], ['run-agent', 1280, 860], ['relay', 1280, 860], ['now', 720, 860], ['mixed', 1280, 860], ['mixed-menu', 1280, 860], ['helpers', 1280, 860],
 ];
 const THEMES = ['dark', 'light'];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

@@ -401,6 +401,13 @@ finished 16 s after the first began, and a.txt / b.txt / c.txt held one / two / 
 Also fixed: with no engine named, a helper was Claude, not GPT ("codex" starts with "c" too). Now it is
 GPT unless Claude is asked for, and a named account brings its own engine.
 
+**One line per helper.** Three helpers on one line meant it flicked between them and the task list was
+cut in the middle. Now `live.helpers` holds a line per helper (who, task, the step it is on, then
+"done, N steps" or "stopped"); the run's own line says "3 helpers side by side", and the lines go when
+every answer is back. A run_agent step also shows its task (or "3 tasks: a | b | c") live and in the
+chat's history, where before it showed nothing after "Ask another agent". Picture: docs/helpers.png
+(demo state `helpers`).
+
 ## The queue (Nov 24, 2026)
 
 While a reply is being written, the send button is Stop until you type; then it queues (aria-label

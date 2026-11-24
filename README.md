@@ -25,12 +25,23 @@ limit, the app offers the next account.
 
 A chat you start in the app can even switch between Claude and GPT (Codex) from one message to the next:
 each engine keeps its own session for the chat, and the one that answers is first told what the other
-did. Claude can also hand tasks to GPT as helpers and get the answers back (`run_agent`), up to three
-side by side.
+did. Claude can also put GPT to work as helpers (next section).
 
 ![Starting a new chat: every account with its 5-hour and weekly usage left and when each resets](docs/pick-who-answers.png)
 
 ![A chat Claude and GPT share: GPT's reply under its own name, and the picker offering Claude Code and Codex accounts for the next message](docs/mixed-chat.png)
+
+### Claude orchestrates, GPT helpers work side by side
+
+In a Claude chat, ask Claude to hand parts of a job to helpers: GPT (Codex), or Claude on another of
+your accounts. Claude sends up to three self-contained tasks in one go and they run at the same time, in
+the same folder. While they work, each helper has its own line under Claude's: its task, then the step
+it is on, then done. Every answer goes back to Claude, which checks the work and carries on.
+
+Helpers never get more permission than the chat (read-only when asked), see none of the conversation,
+and save no chats of their own: what they report back stays in Claude's chat.
+
+![Claude with three GPT helpers at work: one done, one running the avatar test, one editing the banner code](docs/helpers.png)
 
 ### Usage for every account
 
@@ -103,9 +114,13 @@ there (your browser handles the password, the app never sees it).
   questions, permissions and plans reach the window, and asks for thinking summaries
   (`--thinking-display summarized`).
 - **The app's own tools:** each Claude run gets a small MCP server (`src/mcp/tm-tools.cjs`) with
-  `send_user_file`, `list_chats`, `read_chat`, `send_message` and `start_chat`. The chat tools are
-  answered by the app through a local bridge on `127.0.0.1`, with a key per run that stops working when
-  the run ends.
+  `send_user_file`, `list_chats`, `read_chat`, `send_message`, `start_chat` and `run_agent` (helpers).
+  The chat tools are answered by the app through a local bridge on `127.0.0.1`, with a key per run that
+  stops working when the run ends.
+- **Helpers:** `run_agent` takes one task or up to three in `tasks`. Claude Code runs a tool's calls one
+  after another unless the tool changes nothing, so the app starts a call's tasks together itself, as
+  one-off `codex exec --ephemeral` or `claude -p --no-session-persistence` runs, and answers with every
+  result.
 - **Usage:** Claude Code's `/usage`, the limits Claude Code reports during runs, Codex's own session
   files, and Antigravity's local quota service.
 
@@ -121,6 +136,8 @@ vendors as they always do.
   is how its author works. Switch to Edit files or Ask only in the message box if you want prompts.
 - **Chats messaging chats:** one chat can set another to work, with that chat's permissions. Chats in
   Ask only cannot; a loop of chats messaging each other stops after 6 in a row.
+- **Helpers:** a helper works in the chat's folder with the chat's permissions, so in a Full access chat
+  it has full access too. At most three run at once.
 - **Fragile by nature:** it relies on file formats and local interfaces of Claude Code, Codex and
   Antigravity that are not public contracts. An update to any of them can break a part of this app.
 - **Terms:** using several accounts is your responsibility; check each provider's terms.

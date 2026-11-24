@@ -1,5 +1,5 @@
 // The README's pictures, cut from the gallery's demo shots (made-up data only).
-// usage: npx electron tools/shoot.cjs chat-working new accounts ask relay chat-long mixed-menu
+// usage: npx electron tools/shoot.cjs chat-working new accounts ask relay chat-long mixed-menu helpers
 //        npx electron tools/readme-images.cjs
 const { app, nativeImage } = require('electron');
 const fs = require('fs');
@@ -14,6 +14,7 @@ const CUTS = [ // [file in docs/, gallery shot, crop (null = whole window)]
   ['chats-talk.png', 'relay-dark.png', { x: 400, y: 112, width: 770, height: 612 }],
   ['light.png', 'chat-long-light.png', null],
   ['mixed-chat.png', 'mixed-menu-dark.png', { x: 400, y: 262, width: 790, height: 548 }],
+  ['helpers.png', 'helpers-dark.png', { x: 400, y: 56, width: 790, height: 474 }],
 ];
 app.whenReady().then(() => {
   fs.mkdirSync(DOCS, { recursive: true });
