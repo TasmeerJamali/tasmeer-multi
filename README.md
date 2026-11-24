@@ -25,7 +25,8 @@ limit, the app offers the next account.
 
 A chat you start in the app can even switch between Claude and GPT (Codex) from one message to the next:
 each engine keeps its own session for the chat, and the one that answers is first told what the other
-did. Claude can also hand a task to GPT as a helper and get the answer back (`run_agent`).
+did. Claude can also hand tasks to GPT as helpers and get the answers back (`run_agent`), up to three
+side by side.
 
 ![Starting a new chat: every account with its 5-hour and weekly usage left and when each resets](docs/pick-who-answers.png)
 

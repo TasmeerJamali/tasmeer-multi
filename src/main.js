@@ -953,40 +953,67 @@ async function startChatTool(entry, args) {
 // run at once (each is a whole CLI process; this PC is short of memory). Its chat is not saved: one task.
 const helpers = new Set();
 const fmtSecs = (ms) => { const sec = Math.round(ms / 1000); return sec < 60 ? sec + 's' : Math.floor(sec / 60) + 'm ' + String(sec % 60).padStart(2, '0') + 's'; };
-function runAgentTool(entry, args) {
+// One helper task, checked before anything starts: { task, eng, acct, mode, chat, name } or { error }.
+function planHelper(entry, args) {
   const task = String(args.task || args.prompt || args.message || '').trim(); // a model sometimes names it prompt
   if (!task) return { error: 'Say what the helper should do (task): the whole task, standing on its own.' };
-  if (helpers.size >= 3) return { error: 'Three helpers are already working. Wait for one to finish, then try again.' };
-  const eng = String(args.engine || 'codex').toLowerCase().startsWith('c') && !/codex|gpt/i.test(String(args.engine)) ? 'claude' : 'codex';
-  let acct = args.account ? findAccount(args.account) : getAcct(prefs.lastAccount[eng]) || prefs.accounts.find((a) => a.engine === eng);
+  // GPT unless Claude is asked for by name; a named account brings its own engine ("codex" starts with c too)
+  const named = args.account ? findAccount(args.account) : null; const want = String(args.engine || '').toLowerCase();
+  const eng = /claude|anthropic/.test(want) ? 'claude' : /codex|gpt|openai/.test(want) ? 'codex' : named ? named.engine : 'codex';
+  if (eng !== 'codex' && eng !== 'claude') return { error: 'A helper can be GPT (Codex) or Claude.' };
+  const acct = args.account ? named : getAcct(prefs.lastAccount[eng]) || prefs.accounts.find((a) => a.engine === eng);
   if (!acct || acct.engine !== eng) return { error: `No ${eng === 'codex' ? 'Codex (GPT)' : 'Claude'} account${args.account ? ' "' + args.account + '"' : ''}. The accounts are: ${prefs.accounts.map((a) => label(a) + ' (' + (ENGINE_LABEL[a.engine] || a.engine) + ')').join(', ')}.` };
   if (!engine.isSignedIn(root(), acct)) return { error: `${label(acct)} is not signed in.` };
   const parentMode = (entry.p && entry.p.mode) || 'edit';
   const mode = args.read_only || parentMode === 'ask' ? 'ask' : parentMode; // never more than this chat may do
   const chat = { cwd: entry.cwd, mode, model: String(args.model || '').replace(/[^\w.:\-[\]]/g, ''), sessionId: null, chrome: false, effort: '', ephemeral: true };
-  const name = eng === 'codex' ? 'GPT' : 'Claude';
-  const t0 = Date.now(); const steps = []; let reply = ''; let model = chat.model;
+  return { task, eng, acct, mode, chat, name: eng === 'codex' ? 'GPT' : 'Claude' };
+}
+// Runs one planned helper; resolves { text } or { error }, never rejects. tag = { i, n } when it is one of several.
+function runHelper(entry, p, tag) {
+  const t0 = Date.now(); const steps = []; let reply = ''; let model = p.chat.model;
+  const who = p.name + (tag ? ` ${tag.i + 1}/${tag.n}` : ''); // "GPT 2/3" on the live line while several work
   return new Promise((resolve) => {
     let h = null;
-    const done = (out) => { helpers.delete(h); if (entry.helpers) entry.helpers.delete(h); if (!entry.done) { entry.live.sub = null; pushLive(entry.key); } resolve(out); };
+    const done = (out) => {
+      helpers.delete(h); if (entry.helpers) entry.helpers.delete(h);
+      if (!entry.done && !(entry.helpers && entry.helpers.size)) { entry.live.sub = null; pushLive(entry.key); } // the others may still be working
+      resolve(out);
+    };
     try {
-      h = engine.run(root(), { acct, chat, prompt: task }, (ev) => {
+      h = engine.run(root(), { acct: p.acct, chat: p.chat, prompt: p.task }, (ev) => {
         if (ev.kind === 'model') model = ev.model;
         else if (ev.kind === 'tool' && !ev.sub) {
           steps.push((ev.name + ' ' + String(ev.detail || '').slice(0, 80)).trim()); reply = '';
-          if (!entry.done) { entry.live.sub = { name: name + ': ' + ev.name, detail: String(ev.detail || '').slice(0, 160), id: '', at: Date.now() }; entry.live.subSteps = (entry.live.subSteps || 0) + 1; pushLiveSoon(entry); }
+          if (!entry.done) { entry.live.sub = { name: who + ': ' + ev.name, detail: String(ev.detail || '').slice(0, 160), id: '', at: Date.now() }; entry.live.subSteps = (entry.live.subSteps || 0) + 1; pushLiveSoon(entry); }
         } else if (ev.kind === 'text' && !ev.partial) reply = reply ? reply + '\n\n' + ev.text : String(ev.text || '');
         else if (ev.kind === 'done') {
-          const head = `[Tasmeer Multi helper: ${name}${model ? ' (' + model + ')' : ''} on ${label(acct)}, ${steps.length} step${steps.length === 1 ? '' : 's'}, ${fmtSecs(Date.now() - t0)}${mode === 'ask' ? ', read-only' : ''}]`;
+          const head = `[Tasmeer Multi helper${tag ? ' ' + (tag.i + 1) + ' of ' + tag.n : ''}: ${p.name}${model ? ' (' + model + ')' : ''} on ${label(p.acct)}, ${steps.length} step${steps.length === 1 ? '' : 's'}, ${fmtSecs(Date.now() - t0)}${p.mode === 'ask' ? ', read-only' : ''}]`;
           const list = steps.length ? '\n\nSteps it ran: ' + steps.slice(0, 30).join('; ') + (steps.length > 30 ? '; ...' : '') : '';
           if (ev.error && !reply) done({ error: `${head} It stopped: ${ev.error}` });
           else done({ text: `${head}\n\n${reply.trim() || '(It wrote no answer.)'}${ev.error ? '\n\n(It stopped early: ' + ev.error + ')' : ''}${list}` });
         }
       });
-    } catch (e) { done({ error: 'Could not start the helper: ' + (e && e.message || e) }); return; }
+    } catch (e) { done({ error: `[${who}] Could not start the helper: ` + ((e && e.message) || e) }); return; }
     helpers.add(h); (entry.helpers || (entry.helpers = new Set())).add(h);
   });
 }
+// run_agent: one task, or up to three in `tasks` that run at the same time (the answer holds every result).
+async function runAgentTool(entry, args) {
+  const many = Array.isArray(args.tasks) && args.tasks.length > 0;
+  if (many && args.tasks.length > 3) return { error: 'At most three helpers at once. Send three now and the rest in a later call.' };
+  const shared = { engine: args.engine, account: args.account, model: args.model, read_only: args.read_only }; // defaults for every task
+  const list = many ? args.tasks.map((t) => ({ ...shared, ...(typeof t === 'string' ? { task: t } : t || {}) })) : [args];
+  const plans = list.map((a) => planHelper(entry, a));
+  const bad = plans.findIndex((p) => p.error);
+  if (bad >= 0) return { error: (plans.length > 1 ? `Task ${bad + 1}: ` : '') + plans[bad].error + (plans.length > 1 ? ' Nothing was started.' : '') };
+  if (helpers.size + plans.length > 3) return { error: helpers.size ? `${helpers.size} helper${helpers.size === 1 ? ' is' : 's are'} already working, and at most three run at once. Wait for one to finish, or send fewer.` : 'At most three helpers at once.' };
+  const outs = await Promise.all(plans.map((p, i) => runHelper(entry, p, plans.length > 1 ? { i, n: plans.length } : null)));
+  if (outs.length === 1) return outs[0];
+  const text = outs.map((o) => o.text || o.error).join('\n\n----------\n\n');
+  return outs.every((o) => o.error) ? { error: text } : { text };
+}
+
 // A message that waits for its chat. prefs.queue keeps them through a restart.
 function enqueue(key, item) {
   if (!prefs.queue) prefs.queue = {};

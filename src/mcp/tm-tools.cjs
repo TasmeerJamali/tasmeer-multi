@@ -76,17 +76,21 @@ const CHAT_TOOLS = [{
 }];
 CHAT_TOOLS.push({
   name: 'run_agent',
-  description: "Hand a task to another AI agent the user has connected in Tasmeer Multi and wait for its answer: GPT (OpenAI Codex), or Claude on another of the user's accounts. It works in this same folder with this chat's permissions (or read-only), sees none of this conversation, so write the task to stand on its own (what to do, which files, what to report back), and returns its final answer plus the steps it ran. This is Tasmeer Multi's cross-engine version of the Agent tool: use it when the user asks for GPT, Codex or another agent, for a second opinion from a different model, or to split work; you can call it several times at once to run helpers in parallel (at most three).",
+  description: "Hand a task to another AI agent the user has connected in Tasmeer Multi and wait for its answer: GPT (OpenAI Codex), or Claude on another of the user's accounts. It works in this same folder with this chat's permissions (or read-only), sees none of this conversation, so write the task to stand on its own (what to do, which files, what to report back), and returns its final answer plus the steps it ran. This is Tasmeer Multi's cross-engine version of the Agent tool: use it when the user asks for GPT, Codex or another agent, for a second opinion from a different model, or to split work. To run two or three helpers AT THE SAME TIME, put them all in tasks in ONE call: separate run_agent calls run one after another, never together.",
   inputSchema: {
     type: 'object',
     properties: {
       task: { type: 'string', description: 'The whole task, standing on its own.' },
+      tasks: {
+        type: 'array', maxItems: 3,
+        description: 'Instead of task: two or three tasks that run AT THE SAME TIME (separate run_agent calls run one after another, never together). Each is a string, or an object with its own task, engine, account, model, read_only; the answer holds every result.',
+        items: { anyOf: [{ type: 'string' }, { type: 'object', properties: { task: { type: 'string' }, engine: { type: 'string', enum: ['codex', 'claude'] }, account: { type: 'string' }, model: { type: 'string' }, read_only: { type: 'boolean' } }, required: ['task'] }] },
+      },
       engine: { type: 'string', enum: ['codex', 'claude'], description: 'codex (GPT, the default) or claude.' },
       account: { type: 'string', description: "An account email. Default: that engine's usual account." },
       model: { type: 'string', description: 'A model id, if the user asked for one. Default: one that works on that account.' },
       read_only: { type: 'boolean', description: 'true: it may read but not change anything. Default: the same permissions as this chat.' },
     },
-    required: ['task'],
   },
 });
 if (BRIDGE) TOOLS.push(...CHAT_TOOLS);

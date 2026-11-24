@@ -390,6 +390,17 @@ gets no chat tools itself, saves no chat, and at most three run at once. Its ste
 run's line ("GPT: Shell ..."). Checked: Claude asked GPT to create helper.txt; GPT did in 17 s and Claude
 reported it.
 
+**Side by side, in one call.** Claude Code runs an MCP tool's calls one after another unless the tool
+declares that it changes nothing, and a helper can change files: three run_agent calls in one reply ran
+8 s apart in a real test. So one call may carry up to three tasks (`tasks`: strings, or objects with
+their own engine, account, model, read_only; the call's own values are defaults for all), which the app
+starts together and answers with every result, numbered. A task with no text stops the whole call before
+anything starts. The live line names each ("GPT 2/3: shell") and clears when the last one ends.
+Checked with real CLIs: Claude made one call with three GPT tasks; the three started within 0.1 s, all
+finished 16 s after the first began, and a.txt / b.txt / c.txt held one / two / three.
+Also fixed: with no engine named, a helper was Claude, not GPT ("codex" starts with "c" too). Now it is
+GPT unless Claude is asked for, and a named account brings its own engine.
+
 ## The queue (Nov 24, 2026)
 
 While a reply is being written, the send button is Stop until you type; then it queues (aria-label
