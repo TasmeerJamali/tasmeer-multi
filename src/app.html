@@ -1,0 +1,126 @@
+<!doctype html>
+<html class="still">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data: blob: file:">
+<title>Tasmeer Multi</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div id="shell">
+  <aside id="side" data-fit>
+    <div class="side-top">
+      <div class="brand"><span id="brand-mark" class="brand-mark"></span><span class="brand-name">Tasmeer Multi</span></div>
+      <button id="side-close" class="icon-btn" title="Hide the sidebar (Ctrl+B)" aria-label="Hide the sidebar"><span data-icon="sidebar"></span></button>
+    </div>
+    <button id="new" class="new-row"><span data-icon="plus"></span><span class="new-label">New chat</span><kbd>Ctrl N</kbd></button>
+    <div class="find">
+      <label class="search"><span data-icon="search" data-size="15"></span><input id="search" placeholder="Search chats" spellcheck="false"><kbd>Ctrl K</kbd></label>
+      <div class="filters" id="filter" role="tablist">
+        <button data-f="all" class="on">All</button>
+        <button data-f="claude" title="Claude Code chats"><span class="emark claude"></span>Claude</button>
+        <button data-f="codex" title="Codex chats"><span class="emark codex"></span>Codex</button>
+        <button data-f="antigravity" title="Gemini chats (Antigravity)"><span class="emark antigravity"></span>Gemini</button>
+        <button data-f="star" class="f-icon" title="Starred"><span data-icon="star" data-size="14"></span></button>
+        <button data-f="archived" class="f-icon" title="Archived"><span data-icon="archive" data-size="14"></span></button>
+      </div>
+    </div>
+    <nav id="chats" aria-label="Chats"></nav>
+    <section id="acct-panel">
+      <div class="acct-head">
+        <button id="acct-toggle" class="sect-toggle" title="Show or hide the account list"><span class="chev" data-icon="chevronDown" data-size="14"></span>Accounts <span id="acct-count" class="count"></span></button>
+        <span id="acct-dots" class="acct-dots"></span>
+        <span class="grow"></span>
+        <button id="usage-refresh" class="icon-btn" title="Check usage now. You never need to: it checks on its own every 3 minutes, when you come back to the window, after each reply and right after a limit resets, and live while a run goes."><span data-icon="refresh" data-size="15"></span></button>
+        <button id="add-acct" class="icon-btn" title="Add an account"><span data-icon="plus" data-size="15"></span></button>
+        <button id="theme" class="icon-btn" title="Theme"></button>
+      </div>
+      <div id="accounts"></div>
+    </section>
+  </aside>
+
+  <div id="resizer" title="Drag to resize. Double-click to reset. Ctrl+B hides the sidebar."></div>
+  <main id="main">
+    <header id="top" data-fit>
+      <button id="side-toggle" class="icon-btn" title="Show or hide the sidebar (Ctrl+B)" aria-label="Show or hide the sidebar"><span data-icon="sidebar"></span></button>
+      <nav class="crumbs" aria-label="Chat">
+        <span id="crumb-mark" class="emark"></span>
+        <span id="crumb-proj" class="crumb-proj"></span>
+        <span class="crumb-sep" aria-hidden="true">/</span>
+        <span id="title" class="crumb-title"></span>
+      </nav>
+      <span id="ran" class="ran" hidden></span>
+      <button id="folder" class="ghost-btn folder-btn"><span data-icon="folder" data-size="15"></span><span id="folder-path" class="folder-path"></span></button>
+      <button id="reveal" class="icon-btn" title="Show the history file"><span data-icon="file" data-size="15"></span></button>
+    </header>
+
+    <section id="welcome" hidden data-fit>
+      <h1>New chat</h1>
+      <p>Pick who answers. You can switch accounts in the middle of a chat.</p>
+      <div id="seats" class="seats"></div>
+    </section>
+
+    <section id="log" aria-live="polite"></section>
+
+    <div id="dock">
+      <form id="composer" data-fit>
+        <div id="slash" class="pop slash" hidden data-fit></div>
+        <div id="notice" class="notice" hidden></div>
+        <div id="voice-hint" class="notice voice" hidden><span data-icon="mic" data-size="14"></span><span>Listening with Windows voice typing. Talk and it types here. Click anywhere or press Esc to stop, then Enter to send.</span></div>
+        <div id="attach" class="attach" hidden></div>
+        <textarea id="input" rows="1" placeholder="Ask anything, / for skills" spellcheck="true"></textarea>
+        <div class="bar">
+          <div class="bar-l">
+            <button type="button" id="attach-btn" class="icon-btn" title="Attach files (or paste, or drop them here)"><span data-icon="clip"></span></button>
+            <label class="select acct-pick" title="Who answers next">
+              <span id="acct-seat" class="seat-slot"></span>
+              <select id="acct"></select>
+            </label>
+            <div class="joined">
+              <label class="select" title="Model for this chat"><select id="model"></select></label>
+              <label class="select" title="Effort: how hard the model thinks"><select id="effort"></select></label>
+            </div>
+          </div>
+          <div class="bar-r">
+            <label class="select" title="What it may do"><select id="mode">
+              <option value="full">Bypass (auto)</option>
+              <option value="edit">Edit files</option>
+              <option value="ask">Ask only</option>
+            </select></label>
+            <button type="button" id="chrome" class="icon-btn toggle" aria-label="Claude in Chrome"><span data-icon="globe"></span></button>
+            <button type="button" id="mic" class="icon-btn" title="Talk to type (or double-click the message box)" aria-label="Talk"><span data-icon="mic"></span></button>
+            <button type="button" id="speaker" class="icon-btn toggle" aria-label="Read replies aloud"></button>
+            <button id="go" class="send" type="submit" title="Send (Enter)" aria-label="Send"></button>
+          </div>
+        </div>
+        <input type="file" id="file-pick" multiple hidden>
+      </form>
+      <div id="usage-line" class="usage-line" hidden></div>
+    </div>
+  </main>
+</div>
+
+<div id="modal" hidden>
+  <form id="m-form" class="dialog" data-fit>
+    <h2 id="m-title"></h2>
+    <p id="m-help"></p>
+    <div id="m-engine" class="seg" hidden>
+      <label><input type="radio" name="eng" value="claude" checked><span class="emark claude"></span> Claude Code</label>
+      <label><input type="radio" name="eng" value="codex"><span class="emark codex"></span> Codex</label>
+    </div>
+    <input id="m-input" autocomplete="off" spellcheck="false">
+    <div class="row end">
+      <button type="button" id="m-cancel" class="ghost-btn">Cancel</button>
+      <button type="submit" class="primary" id="m-ok">OK</button>
+    </div>
+  </form>
+</div>
+<script src="ui/spring.js"></script>
+<script src="ui/icons.js"></script>
+<script src="ui/token.js"></script>
+<script src="markdown.js"></script>
+<script src="dropdown.js"></script>
+<script src="demo/mock.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,28 @@
+glows (0 0 Npx shadows)      0
+gradients                    1
+glass (backdrop-filter)      0
+pill radii (999px / 50%)     9
+one-sided stripes            5
+infinite animations          4
+box-shadows                  9
+uppercase labels             4
+display serif                2
+css lines                    353
+  glyph app.html:20 ★
+  glyph app.html:24 &#8635;
+  glyph app.html:31 &#9776;
+  glyph app.html:64 &#127908;
+  glyph app.html:65 &#128266;
+  glyph app.js:51 ·
+  glyph app.js:55 \u2605
+  glyph app.js:56 ·
+  glyph app.js:105 \u{1F4CC}
+  glyph app.js:112 \u{1F4C1}
+  glyph app.js:172 ·
+  glyph app.js:180 ·
+  glyph app.js:184 ·
+  glyph app.js:253 ·
+  glyph app.js:383 \u263E \u2600 \u25D0
+  glyph app.js:469 \u{1F50A} \u{1F507}
+  glyph app.js:482 ·
+glyph icons                  20

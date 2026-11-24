@@ -1,0 +1,11 @@
+﻿glows (0 0 Npx shadows)      0
+gradients                    0
+glass (backdrop-filter)      0
+pill radii (999px / 50%)     3
+one-sided stripes            1
+infinite animations          4
+box-shadows                  3
+uppercase labels             0
+display serif                0
+css lines                    402
+glyph icons                  0
