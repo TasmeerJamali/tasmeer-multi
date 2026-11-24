@@ -137,7 +137,34 @@ let thinkingDisplayOk = true; // an older Claude Code that does not know --think
 // {kind:'tool-done', id, sub} | {kind:'ask', id, tool, input, detail} | {kind:'ask-cancel', id} |
 // {kind:'done', error?, cost?} . Returns {stop(), answer(id, response)}.
 // `sub` is the step of a helper agent (Agent tool) working inside the run, not the run's own step.
-function run(root, { acct, chat, prompt }, on) {
+// Codex with no model picked: the default may be one this login is refused (the plan's catalog changes
+// under it). Then this tries the next good model once, without the user seeing the refusal: the refused
+// attempt's thread is reported as 'retired' so the app hides it, and its 'session' event is held back
+// until a model really answers.
+function run(root, opts, on) {
+  if (!opts || !opts.acct || opts.acct.engine !== 'codex' || (opts.chat && opts.chat.model)) return runOnce(root, opts, on);
+  const tried = new Set(); let inner = null; let stopped = false;
+  const outer = { pid: 0, alive: () => !!(inner && inner.alive()), answer: () => false, say: undefined, stop() { stopped = true; if (inner) inner.stop(); } };
+  const attempt = () => {
+    const model = codexDefaultModel(root, opts.acct, tried); tried.add(model);
+    let answered = false; let sid = null;
+    inner = runOnce(root, { ...opts, chat: { ...opts.chat, model } }, (ev) => {
+      if (ev.kind === 'session') { sid = ev.id; return; }
+      if (ev.kind !== 'done') { if (!answered) { answered = true; if (sid) on({ kind: 'session', id: sid }); on({ kind: 'model', model }); } on(ev); return; }
+      if (!answered && !stopped && tried.size < 3 && isModelRefusal(String(ev.detail || '') + ' ' + String(ev.error || ''))) {
+        markRefused(root, opts.acct, model);
+        if (sid && !(opts.chat && opts.chat.sessionId)) on({ kind: 'retired', engine: 'codex', id: sid });
+        attempt(); return;
+      }
+      if (!answered && sid) on({ kind: 'session', id: sid });
+      on(ev);
+    });
+    outer.pid = inner.pid;
+  };
+  attempt();
+  return outer;
+}
+function runOnce(root, { acct, chat, prompt }, on) {
   if (acct.engine === 'antigravity') return require('./agy').run({ chat, prompt }, on);
   prepare(root, acct);
   const env = envFor(root, acct);
@@ -165,12 +192,18 @@ function run(root, { acct, chat, prompt }, on) {
     if (chat.sessionId) args.push('--resume', chat.sessionId);
     if (chat.ephemeral) args.push('--no-session-persistence'); // tests only: leaves no chat behind
     env.CLAUDE_CODE_ENABLE_ASK_USER_QUESTION_TOOL = '1'; // the switch the Claude app sets for its own sessions
+    env.MCP_TOOL_TIMEOUT = '3600000'; // a helper agent (run_agent) may work for many minutes inside one tool call
   } else {
     exe = 'codex';
     args = ['exec'];
     if (chat.sessionId) args.push('resume', chat.sessionId);
     args.push('--json', '--skip-git-repo-check', ...MODES.codex[chat.mode || 'edit']);
-    if (chat.model) args.push('-m', chat.model);
+    // A model this login can really use: the one picked, else config.toml's if the plan still lists it, else
+    // the plan's top listed model. Without this every Codex turn failed on Nov 25, 2026: config.toml said
+    // gpt-6.1-sol, which a ChatGPT login is refused ("not in accessible catalog").
+    const cm = chat.model || codexDefaultModel(root, acct);
+    if (cm) args.push('-m', cm);
+    if (chat.ephemeral && !chat.sessionId) args.push('--ephemeral'); // a helper's one-off task: no chat saved
     if (chat.effort) args.push('-c', `model_reasoning_effort="${String(chat.effort).replace(/[^a-z]/g, '')}"`);
     args.push('-'); // prompt from stdin
   }
@@ -286,6 +319,70 @@ function run(root, { acct, chat, prompt }, on) {
   };
 }
 
+// The model to give Codex when none is picked: the newest one that really answered in this login's own
+// Codex chats (on Nov 25, 2026: gpt-6.2-sol, gpt-6.2-astra in 36 chats), else config.toml's, else the
+// plan's top listed one; never one this login was refused. The cached model list alone cannot be trusted:
+// it flipped between 8 and 12 models in two minutes, and listed gpt-6.1-sol while the server refused it.
+const refusedModels = new Map(); // account id -> models refused this session
+let savedRefusals = null; // { account id: { model: when refused } }, kept in <data>/codex-refused.json across restarts
+const refusalsFile = (root) => path.join(root, 'codex-refused.json');
+function refusalsOn(root) { if (!savedRefusals) savedRefusals = readJson(refusalsFile(root)) || {}; return savedRefusals; }
+function markRefused(root, acct, model) {
+  if (!model) return; if (!refusedModels.has(acct.id)) refusedModels.set(acct.id, new Set()); refusedModels.get(acct.id).add(model);
+  try { const all = refusalsOn(root); (all[acct.id] = all[acct.id] || {})[model] = Date.now(); fs.writeFileSync(refusalsFile(root), JSON.stringify(all, null, 1)); } catch { /* best effort: this session still remembers */ }
+}
+const isModelRefusal = (t) => /not supported when using Codex with a ChatGPT account|model_not_in_accessible_catalog|model_not_found|does not exist or you do not have access/i.test(String(t || ''));
+const goodCache = new Map(); // account dir -> { at, list: { good, refused } }
+const CLI_CLIENT = /^codex_(exec|cli_rs)$/; // the Codex CLI (this app runs `codex exec`); the desktop app is another, newer client
+const REFUSAL_KEEP = 3 * 24 * 3600 * 1000; // a refusal on disk counts for 3 days: access can open up with a newer CLI or plan
+// What this login's own CLI chats say, newest first: models that answered (good) and models Codex refused.
+function recentCodexModels(root, acct) {
+  const home = accountDir(root, acct); const c = goodCache.get(home);
+  if (c && Date.now() - c.at < 5 * 60000) return c.list;
+  const files = [];
+  const walk = (d, depth) => { let es = []; try { es = fs.readdirSync(d, { withFileTypes: true }); } catch { return; } es.sort((a, b) => (a.name < b.name ? 1 : -1)); for (const e of es) { if (files.length >= 60) return; const p = path.join(d, e.name); if (e.isDirectory() && depth < 3) walk(p, depth + 1); else if (e.name.endsWith('.jsonl')) files.push(p); } };
+  walk(path.join(home, 'sessions'), 0);
+  const byUse = files.map((p) => { try { return [p, fs.statSync(p).mtimeMs]; } catch { return [p, 0]; } }).sort((x, y) => y[1] - x[1]).map((x) => x[0]); // last answered first
+  const list = { good: [], refused: new Set(), when: {} }; const decided = new Set();
+  for (const file of byUse) {
+    try {
+      const st = fs.statSync(file); const size = st.size; const len = Math.min(size, 256 * 1024); const b = Buffer.alloc(len);
+      const head = Buffer.alloc(Math.min(size, 4096));
+      const fd = fs.openSync(file, 'r'); fs.readSync(fd, head, 0, head.length, 0); fs.readSync(fd, b, 0, len, size - len); fs.closeSync(fd);
+      // which program wrote it: the first line names it ("originator"); older files may not
+      const client = (/"originator":"([^"]*)"/.exec(head.toString('utf8')) || [])[1] || '';
+      if (client && !CLI_CLIENT.test(client)) continue;
+      let model = ''; let answered = false; let refused = false;
+      for (const l of b.toString('utf8').split('\n')) {
+        if (!l.startsWith('{')) continue; let e; try { e = JSON.parse(l); } catch { continue; }
+        const p = e.payload || {};
+        if (e.type === 'turn_context' && p.model) { model = p.model; answered = false; refused = false; }
+        if (e.type === 'response_item' && p.type === 'message' && p.role === 'assistant' && model) answered = true;
+        if (e.type === 'event_msg' && p.type === 'task_complete' && p.error && model && isModelRefusal(JSON.stringify(p.error))) refused = true;
+      }
+      if (!model || decided.has(model)) continue; // the newest chat that used a model decides it
+      if (answered) { decided.add(model); list.good.push(model); list.when[model] = st.mtimeMs; } else if (refused && Date.now() - st.mtimeMs < REFUSAL_KEEP) { decided.add(model); list.refused.add(model); list.when[model] = st.mtimeMs; }
+    } catch { /* unreadable */ }
+  }
+  goodCache.set(home, { at: Date.now(), list });
+  return list;
+}
+// The model a Codex run with none picked gets: the newest one that answered in this login's CLI chats,
+// then config.toml's default, then the first in Codex's list; never one refused (this session or on disk).
+// m = { default, options } as accountModels gives it.
+function pickCodexModel(root, acct, skip, m) {
+  const seen = recentCodexModels(root, acct); const refused = refusedModels.get(acct.id) || new Set();
+  const saved = refusalsOn(root)[acct.id] || {};
+  const savedNo = (x) => !!saved[x] && Date.now() - saved[x] < REFUSAL_KEEP && !(seen.good.includes(x) && seen.when[x] > saved[x]);
+  const ok = (x) => !!x && !skip.has(x) && !refused.has(x) && !seen.refused.has(x) && !savedNo(x);
+  for (const x of seen.good) if (ok(x)) return x;
+  const listed = (m.options || []).map((o) => o.value);
+  if (ok(m.default) && listed.includes(m.default)) return m.default;
+  return listed.find(ok) || '';
+}
+function codexDefaultModel(root, acct, skip = new Set()) {
+  try { return pickCodexModel(root, acct, skip, accountModels(root, acct)); } catch { return ''; }
+}
 function toolDetail(input = {}) {
   const v = input.command || input.file_path || input.path || input.pattern || input.url || input.query || input.description || '';
   return String(v).slice(0, 200);
@@ -296,6 +393,7 @@ function toolDetail(input = {}) {
 const NOT_SENT = 'nothing was sent';
 function friendlyError(s) {
   const t = String(s || '');
+  if (isModelRefusal(t)) { const m = /The '([^']+)' model/.exec(t); return `Codex refused the model ${m ? m[1] : 'picked'} for this login, so ${NOT_SENT}. Pick another model in the model menu and send again: your message is back in the box.`; }
   if (/already has an active writer|thread-store conflict/i.test(t)) return `Codex is using this chat somewhere else right now, most likely in the Codex app, and it lets only one program write to a chat at a time, so ${NOT_SENT}. Let it finish there or close the chat there, then send again: your message is back in the box.`;
   return t;
 }
@@ -366,8 +464,11 @@ function accountModels(root, acct, seenModels = []) {
   try { def = (fs.readFileSync(path.join(home, 'config.toml'), 'utf8').match(/^\s*model\s*=\s*"([^"]+)"/m) || [])[1] || ''; } catch { /* none */ }
   let defEff = '';
   try { defEff = (fs.readFileSync(path.join(home, 'config.toml'), 'utf8').match(/^\s*model_reasoning_effort\s*=\s*"([^"]+)"/m) || [])[1] || ''; } catch { /* none */ }
-  const base = (options.find((o) => o.value === def) || options[0] || {}).efforts || ['low', 'medium', 'high'].map((v) => ({ value: v, label: v[0].toUpperCase() + v.slice(1) }));
-  return { default: def, options, efforts: { default: defEff, options: base } };
+  // "Default" in the picker is the model a run will really get (config.toml's may be one this login is refused)
+  let runs = ''; try { runs = pickCodexModel(root, acct, new Set(), { default: def, options }); } catch { /* none */ }
+  const now = runs || def;
+  const base = (options.find((o) => o.value === now) || options[0] || {}).efforts || ['low', 'medium', 'high'].map((v) => ({ value: v, label: v[0].toUpperCase() + v.slice(1) }));
+  return { default: now, defaultLabel: now ? (options.find((o) => o.value === now) || {}).label || now : '', options, efforts: { default: defEff, options: base } };
 }
 
 const claudeSettings = (root, acct) => readJson(path.join(acct.main ? MAIN.claude : accountDir(root, acct), 'settings.json')) || {};
@@ -496,4 +597,4 @@ function codexUsage(file) {
   } catch { return null; }
 }
 
-module.exports = { parseUsageText, probeUsage, codexUsage, probeCommands, commandList, accountEmail, accountModels, prepare, run, openSignIn, isSignedIn, accountDir, looksLikeLimit, MAIN };
+module.exports = { parseUsageText, probeUsage, codexUsage, probeCommands, commandList, accountEmail, accountModels, prepare, run, openSignIn, isSignedIn, accountDir, looksLikeLimit, MAIN, codexDefaultModel, isModelRefusal };

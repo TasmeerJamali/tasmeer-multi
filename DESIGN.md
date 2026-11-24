@@ -259,6 +259,16 @@ new folder, unpin, a list update mid-drag, a file dropped on the sidebar; result
 18. (same day) The run's own items are found by time, with 0.25 s of slack. With 3 s, a queued message
    (sent 0.3 s after the last reply ended) pulled that reply into its own box for a moment; and "continue"
    sent twice must match the new message, not the older one with the same words.
+20. (Nov 25) Codex turns failed with no model picked: config.toml named gpt-6.1-sol, which a ChatGPT
+   login is refused, and Codex's own model list cannot be trusted to say so (it flipped between 8 and 12
+   models in two minutes and listed the refused one). Codex now gets the newest model that really
+   answered in this login's chats, and a refusal is retried once with the next one, unseen.
+   The first version learned gpt-6.2-astra, which was refused too: it had only ever answered in the Codex
+   desktop app, a newer client (0.171) than the CLI this app runs (0.155), and the model a login may use
+   depends on the client. So only the CLI's own chats count (each chat file's first line names the
+   program that wrote it), a refusal Codex wrote into a chat counts for 3 days, refusals are also kept in
+   `<data>/codex-refused.json` so a restart never pays for the same refused try again, and the model
+   picker's "default" names the model a run will really get.
 19. (Nov 25: a way to send without waiting in the queue) Tested on Claude Code 2.1.331 before building:
    a message written to a running reply is read at its next step, inside the same reply; one written
    while Claude writes its last words waits and is answered as a next turn in the same process, so the
@@ -349,6 +359,36 @@ With `report_back`, its final reply comes back to the sender as a new message af
   a record of something sent, quieter than a reply.
 - Guards: not to itself; "Ask only" chats may not set other chats to work; 6 chats messaging each other
   in a row is treated as a loop; at most 40 such messages in 10 minutes.
+
+## Mixed chats: Claude and GPT in one chat (Nov 25, 2026)
+
+A new chat started from the message box with a Claude or Codex account is a mixed chat: for every
+message the account picker offers every Claude and every Codex account, and the chat carries on.
+
+- **How:** Claude Code and Codex keep different history formats, so neither can open the other's chat.
+  Each engine keeps its own native session for the chat; a small record (`<data>/mixed/<id>.json`,
+  `src/mixed.js`) ties them together and logs every turn (who answered, the user's words, the reply,
+  the steps). When the engine changes, the one that answers is first told what the others did since it
+  last spoke: a catch-up block in front of your message (the newest turns in full, about 24,000
+  characters in all). They share the folder, so file changes are already there.
+- **In the window:** one row in the list with a half-filled mark (Claude's filled half beside Codex's
+  ring); above each reply, who wrote it (engine mark, model, account); under your message, "with what
+  the other agent did since" when a catch-up went with it. The catch-up itself never shows.
+- **Safe by design:** existing chats are untouched (they stay one engine). The engines' own files are
+  the history; if a record were lost, its sessions would show up again as ordinary chats. Gemini
+  (Antigravity) cannot join a mixed chat yet; a new chat with a Gemini account is an ordinary one.
+- **Checked with the real CLIs:** Claude wrote fruit.txt (apple); GPT, never having seen the chat, said
+  "Claude created fruit.txt with one line, apple" and added banana; Claude, back again, said banana was
+  added by GPT "per the catch-up note".
+
+## Helpers: another engine as a sub-agent (Nov 25, 2026)
+
+`run_agent` (Tasmeer Multi's own tool) lets a Claude run hand a self-contained task to GPT (Codex) or
+to Claude on another account and get the answer back, like Claude Code's Agent tool across engines.
+The helper works in the same folder, never with more than the chat may do (read-only when asked),
+gets no chat tools itself, saves no chat, and at most three run at once. Its steps show live under the
+run's line ("GPT: Shell ..."). Checked: Claude asked GPT to create helper.txt; GPT did in 17 s and Claude
+reported it.
 
 ## The queue (Nov 24, 2026)
 

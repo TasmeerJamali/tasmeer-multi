@@ -17,13 +17,19 @@ Antigravity already keep, so chats started in a terminal, an IDE or the vendors'
 The app stores no chats of its own. The list is in your order: drag a chat above or below another, pin
 it, or put it in a folder; activity never reshuffles it.
 
-### Any account answers any chat
+### Any account answers any chat, Claude or GPT
 
 Add as many Claude Code and Codex logins as you have. Each gets its own login folder, linked to your one
 shared history, so a chat started on one account resumes on another. When a reply fails on a usage
 limit, the app offers the next account.
 
+A chat you start in the app can even switch between Claude and GPT (Codex) from one message to the next:
+each engine keeps its own session for the chat, and the one that answers is first told what the other
+did. Claude can also hand a task to GPT as a helper and get the answer back (`run_agent`).
+
 ![Starting a new chat: every account with its 5-hour and weekly usage left and when each resets](docs/pick-who-answers.png)
+
+![A chat Claude and GPT share: GPT's reply under its own name, and the picker offering Claude Code and Codex accounts for the next message](docs/mixed-chat.png)
 
 ### Usage for every account
 

@@ -93,6 +93,12 @@ kbd { font: 500 10.5px var(--mono); color: var(--fg-3); }
 .emark.claude { background: var(--eng-claude); }
 .emark.codex { border: 1.5px solid var(--eng-codex); }
 .emark.antigravity { background: var(--eng-gemini); border-radius: 1.5px; transform: rotate(45deg) scale(.82); }
+/* a chat Claude and GPT share: Claude's filled half beside Codex's hollow ring */
+.emark.mixed { border: 1.5px solid var(--eng-codex); background: linear-gradient(90deg, var(--eng-claude) 50%, transparent 50%); }
+/* who wrote a reply in a mixed chat */
+.turn-who { display: flex; align-items: center; gap: 7px; min-width: 0; margin-bottom: -2px; font-size: 11.5px; color: var(--fg-3); }
+.turn-who .tw-name { flex: none; color: var(--fg-2); font-weight: 500; }
+.turn-who .tw-acct { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---------- sidebar ---------- */
 #side { width: var(--side-w); transform: translateX(calc(var(--side-col, var(--side-w)) - var(--side-w))); background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; overflow: hidden; padding: 8px 8px 6px; user-select: none; }

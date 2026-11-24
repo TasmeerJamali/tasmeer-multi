@@ -4,6 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const { MAIN } = require('./engine');
+const { stripCatchUp } = require('./mixed'); // a mixed chat's messages carry a catch-up block in front (mixed.js)
 
 const CLAUDE_DIR = path.join(MAIN.claude, 'projects');
 const CODEX_DIR = path.join(MAIN.codex, 'sessions');
@@ -128,8 +129,8 @@ function normalize(engine, e) {
     if (e.type === 'user' && e.message) {
       const c = e.message.content;
       const ans = answeredItem(c, ts); if (ans) { out.push(ans); return out; }
-      const raw = claudeText(c); const cmd = commandText(raw); const t = cmd || raw;
-      if (t && (cmd || !isNoise(t)) && !(Array.isArray(c) && c.some((x) => x.type === 'tool_result'))) out.push({ role: 'user', text: t, ts, via: VIA[e.entrypoint] || e.entrypoint || '' });
+      const cu = stripCatchUp(claudeText(c)); const raw = cu.text; const cmd = commandText(raw); const t = cmd || raw;
+      if (t && (cmd || !isNoise(t)) && !(Array.isArray(c) && c.some((x) => x.type === 'tool_result'))) out.push({ role: 'user', text: t, ts, via: VIA[e.entrypoint] || e.entrypoint || '', ...(cu.caughtUp ? { caughtUp: true } : {}) });
     } else if (e.type === 'assistant' && e.message) {
       for (const c of e.message.content || []) {
         if (c.type === 'text' && c.text && c.text.trim()) out.push({ role: 'assistant', text: c.text, ts, model: e.message.model });
@@ -143,7 +144,8 @@ function normalize(engine, e) {
     if (e.type !== 'response_item') return out;
     if (p.type === 'message') {
       const t = codexText(p.content);
-      if (p.role === 'user' && !isNoise(t)) out.push({ role: 'user', text: t, ts });
+      const cu = p.role === 'user' ? stripCatchUp(t) : null;
+      if (cu && !isNoise(cu.text)) out.push({ role: 'user', text: cu.text, ts, ...(cu.caughtUp ? { caughtUp: true } : {}) });
       else if (p.role === 'assistant' && t.trim()) out.push({ role: 'assistant', text: t, ts });
     } else if (p.type === 'function_call' || p.type === 'custom_tool_call' || p.type === 'local_shell_call') {
       out.push({ role: 'tool', name: p.name || 'shell', detail: toolDetail(p.arguments ?? p.input ?? p.action), ts });

@@ -11,6 +11,9 @@ const engine = require('./engine');
 const history = require('./history');
 const voice = require('./voice');
 const agy = require('./agy');
+const mixed = require('./mixed');
+const isMixed = (k) => typeof k === 'string' && k.startsWith('mixed:');
+const mixedOf = (k) => (isMixed(k) ? mixed.get(k.slice(6)) : null);
 
 app.setName('Tasmeer Multi');
 // Settings from when this app was called Claude Multi move over once.
@@ -76,6 +79,11 @@ const accountsOut = () => prefs.accounts.map((a) => ({ ...a, email: engine.accou
 function chatPrefs(key, eng) {
   if (key === 'new') return prefs.draft;
   const p = prefs.chat[key] || {};
+  if (isMixed(key)) { // any Claude or Codex account answers a mixed chat
+    let a = getAcct(p.accountId);
+    if (!a || !mixed.ENGINES.includes(a.engine)) a = getAcct(prefs.lastAccount.claude) || getAcct('main-claude');
+    return { accountId: a.id, mode: p.mode || 'full', model: p.model || '', effort: p.effort || '' };
+  }
   let acct = getAcct(p.accountId);
   if (!acct || acct.engine !== eng) acct = getAcct(prefs.lastAccount[eng]) || getAcct(`main-${eng}`);
   return { accountId: acct.id, mode: p.mode || 'full', model: p.model || '', effort: p.effort || '' };
@@ -97,10 +105,10 @@ function pushSessions() {
   const out = sessions.map((s) => {
     const recent = Date.now() - (s.mtime || s.updated) < 40000; // the file was written lately (cheap check first)
     // Gemini: Antigravity says itself whether a chat is running. Others: a real message in the last 40 s.
-    const active = runs.has(s.key) || (s.engine === 'antigravity' ? !!s.agyRunning : (recent && Date.now() - history.lastTalk(s.engine, s.file, s.mtime || s.updated) < 40000));
+    const active = runs.has(s.key) || (s.engine === 'mixed' ? false : s.engine === 'antigravity' ? !!s.agyRunning : (recent && Date.now() - history.lastTalk(s.engine, s.file, s.mtime || s.updated) < 40000));
     if (active) nowActive.add(s.key);
     const asking = !!(runs.get(s.key) && runs.get(s.key).live && runs.get(s.key).live.ask); // waiting for your answer
-    return { key: s.key, engine: s.engine, title: s.title, cwd: s.cwd, updated: s.updated, running: runs.has(s.key), active, asking, done: !!prefs.unread[s.key], archivedFile: !!s.archivedFile };
+    return { key: s.key, engine: s.engine, title: s.title, cwd: s.cwd, updated: s.updated, running: runs.has(s.key), active, asking, done: !!prefs.unread[s.key], archivedFile: !!s.archivedFile, ...(s.engines ? { engines: s.engines } : {}) };
   });
   wasActive = nowActive;
   if (changed) savePrefs();
@@ -126,15 +134,71 @@ function keepListOrder() {
   if (!top.length && !bottom.length) return false;
   prefs.listOrder = [...top, ...prefs.listOrder, ...bottom].slice(0, 5000); savePrefs(); return true;
 }
+// Mixed chats: each is one row, in place of the native sessions (one per engine) it holds. A record that
+// is lost or deleted simply lets those sessions show up again as ordinary chats.
+function withMixed(list) {
+  const byKey = new Map(list.map((x) => [x.key, x]));
+  const hidden = new Set(Object.keys(prefs.hiddenChats || {})); const rows = [];
+  for (const m of mixed.all()) {
+    const parts = [];
+    for (const [eng, sid] of Object.entries(m.sessions)) { hidden.add(eng + ':' + sid); const x = byKey.get(eng + ':' + sid); if (x) parts.push(x); }
+    const lastTurn = m.turns.length ? m.turns[m.turns.length - 1].at : 0;
+    const updated = Math.max(m.created || 0, lastTurn, ...parts.map((x) => x.updated || 0));
+    rows.push({ key: 'mixed:' + m.id, engine: 'mixed', id: m.id, file: mixed.fileOf(m.id), cwd: m.cwd, title: m.title || 'New chat', updated, mtime: updated,
+      engines: [...new Set(m.turns.filter((t) => !t.pending || runs.has('mixed:' + m.id)).map((t) => t.engine))], parts: parts.map((x) => ({ engine: x.engine, file: x.file, key: x.key, id: x.id })) });
+  }
+  return [...list.filter((x) => !hidden.has(x.key)), ...rows].sort((a, b) => b.updated - a.updated);
+}
+// A mixed chat's items, from each engine's own file, in time order. Every reply knows who wrote it
+// (engine, account, model), so the window can say so above it.
+const MIXED_READ = 30 * 1024 * 1024; // how much of each engine's file a mixed chat reads at once
+function turnAt(m, engine, t) { let best = null; for (const x of m.turns) if (x.engine === engine && x.at <= t + 2000) best = x; return best; }
+// a message this app sent: the record has a turn for it that started just before the engine wrote it down
+const sentHere = (m, engine, t) => m.turns.some((x) => x.engine === engine && t >= x.at - 2000 && t <= x.at + 20000);
+function mixedItems(m, engine, items) {
+  let lastT = 0;
+  return items.map((it) => {
+    const t = Date.parse(it.ts || '') || lastT; lastT = t;
+    const out = { ...it, src: engine, _t: t };
+    if (it.role === 'user' && !it.midRun && sentHere(m, engine, t)) out.via = 'Tasmeer Multi';
+    if (it.role !== 'user' && it.role !== 'note' && it.role !== 'model') {
+      const turn = turnAt(m, engine, t);
+      out.who = { engine, account: turn ? turn.account : '', model: it.model && it.model !== '<synthetic>' ? it.model : turn ? turn.model : '' };
+    }
+    return out;
+  });
+}
+const byTime = (items) => items.map((it, i) => [it, i]).sort((a, b) => (a[0]._t - b[0]._t) || (a[1] - b[1])).map(([it]) => { const o = { ...it }; delete o._t; return o; });
+function readMixed(s) { // the whole merged chat, and where each file was read up to (for following it)
+  const m = mixedOf(s.key); const files = []; const items = [];
+  for (const part of s.parts || []) {
+    const fl = { engine: part.engine, file: part.file, end: 0 };
+    try { const size = fs.statSync(part.file).size; const r = history.readAfter(part.engine, part.file, Math.max(0, size - MIXED_READ)); fl.end = r.end; if (m) items.push(...mixedItems(m, part.engine, r.items)); } catch { /* not written yet */ }
+    files.push(fl);
+  }
+  return { items: byTime(items), files };
+}
+const titleOf = (t) => String(t || '').split(/\s+Attached files? \(open from these paths\):/)[0].replace(/\s+/g, ' ').trim().slice(0, 90) || 'New chat';
+// A new chat from the message box is a mixed chat when a Claude or Codex account starts it (Nov 25, 2026).
+function newMixedChat(prompt) {
+  if (prefs.mixedChats === false) return null;
+  const a = getAcct(prefs.draft.accountId); if (!a || !mixed.ENGINES.includes(a.engine)) return null; // Gemini: an ordinary Antigravity chat
+  const m = mixed.create({ cwd: prefs.draft.cwd || os.homedir(), title: titleOf(prompt) });
+  const mk = 'mixed:' + m.id;
+  prefs.chat[mk] = { accountId: a.id, mode: prefs.draft.mode || 'full', model: prefs.draft.model || '', effort: prefs.draft.effort || '' };
+  prefs.lastAccount[a.engine] = a.id; savePrefs();
+  refreshSessions();
+  return mk;
+}
 function refreshSessions() {
   let base = [];
   try { base = history.list(); } catch (e) { console.error('list failed', e); }
-  sessions = [...base, ...agySessions].sort((a, b) => b.updated - a.updated);
+  sessions = withMixed([...base, ...agySessions]);
   if (keepListOrder()) pushOrg();
   pushSessions();
   if (!agyBusy && agy.installed()) {
     agyBusy = true;
-    agy.list().then((l) => { if (!agySessions.length && l.length) usageLog('Gemini list: ' + l.length + ' chats'); agySessions = l; sessions = [...base, ...agySessions].sort((a, b) => b.updated - a.updated); agyReady = true; if (keepListOrder()) pushOrg(); pushSessions(); }).catch((e) => { usageLog('Gemini list FAILED: ' + (e && e.stack || e)); }).finally(() => { agyBusy = false; agyReady = true; });
+    agy.list().then((l) => { if (!agySessions.length && l.length) usageLog('Gemini list: ' + l.length + ' chats'); agySessions = l; sessions = withMixed([...base, ...agySessions]); agyReady = true; if (keepListOrder()) pushOrg(); pushSessions(); }).catch((e) => { usageLog('Gemini list FAILED: ' + (e && e.stack || e)); }).finally(() => { agyBusy = false; agyReady = true; });
   }
 }
 function pushPrefsFor(key, eng) { send('chat-prefs', { key, ...chatPrefs(key, eng) }); }
@@ -152,6 +216,14 @@ function pushQueue(key) { send('queue', { key, items: queueOf(key).map((i) => ({
 
 // ---------- open / follow a chat ----------
 function openChat(key) {
+  if (isMixed(key)) {
+    const s = sessions.find((x) => x.key === key); const m = mixedOf(key); if (!s || !m) return;
+    const r = readMixed(s);
+    view = { key, engine: 'mixed', files: r.files };
+    send('view', { key, engine: 'mixed', cwd: m.cwd, title: prefs.meta[key]?.title || s.title, items: r.items, more: false });
+    pushPrefsFor(key, 'mixed'); pushLive(key); pushQueue(key);
+    return;
+  }
   if (key === 'new') {
     const a = getAcct(prefs.draft.accountId) || getAcct('main-claude');
     view = { key: 'new', engine: a.engine };
@@ -185,6 +257,14 @@ setInterval(() => {
     if (v.mtime === mt) return;
     v.mtime = mt; agyFollow = true;
     agy.items(v.file).then((r) => { if (view === v && r.items.length > v.count) { send('append', { key: v.key, items: r.items.slice(v.count) }); v.count = r.items.length; } }).finally(() => { agyFollow = false; });
+    return;
+  }
+  if (view && view.files) { // a mixed chat: every engine's file, and any engine that just joined
+    const v = view; const s = sessions.find((x) => x.key === v.key); const m = mixedOf(v.key);
+    if (s) for (const part of s.parts || []) if (!v.files.some((x) => x.file === part.file)) v.files.push({ engine: part.engine, file: part.file, end: 0 });
+    const out = [];
+    for (const fl of v.files) { try { const r = history.readAfter(fl.engine, fl.file, fl.end); if (r.end > fl.end) { fl.end = r.end; if (m) out.push(...mixedItems(m, fl.engine, r.items)); } } catch { /* busy */ } }
+    if (out.length && view === v) send('append', { key: v.key, items: byTime(out) });
     return;
   }
   if (!view || !view.file || view.engine === 'antigravity') return;
@@ -316,7 +396,8 @@ ipcMain.handle('set-prefs', (_e, key, patch) => {
   const cur = chatPrefs(key, s.engine);
   if ('accountId' in patch) {
     const a = getAcct(patch.accountId);
-    if (!a || a.engine !== s.engine) { pushPrefsFor(key, s.engine); return false; }
+    if (!a || (s.engine === 'mixed' ? !mixed.ENGINES.includes(a.engine) : a.engine !== s.engine)) { pushPrefsFor(key, s.engine); return false; }
+    if (s.engine === 'mixed' && getAcct(cur.accountId)?.engine !== a.engine) { cur.model = ''; cur.effort = ''; }
     cur.accountId = a.id; prefs.lastAccount[a.engine] = a.id;
   }
   if ('mode' in patch) cur.mode = patch.mode;
@@ -410,6 +491,7 @@ ipcMain.handle('chat-menu', (_e, key) => {
 // Deletes the chat's history file (and its side folder) from this PC. Asks first, every time.
 async function deleteChat(key) {
   const s = sessions.find((x) => x.key === key); if (!s) return;
+  if (s.engine === 'mixed') return deleteMixed(s);
   const name = prefs.meta[key]?.title || s.title;
   if (runs.has(key)) { dialog.showMessageBox(win, { type: 'info', message: 'This chat is running right now.', detail: 'Stop it first, then delete it.' }); return; }
   const recent = Date.now() - (s.mtime || s.updated) < 2 * 60 * 1000; // any write, even bookkeeping, means it may be open elsewhere
@@ -434,6 +516,29 @@ async function deleteChat(key) {
   if (view?.key === key) { openChat('new'); send('select', 'new'); }
 }
 ipcMain.handle('delete-chat', (_e, key) => deleteChat(key));
+async function deleteMixed(s) { // its record and each engine's file for it
+  const name = prefs.meta[s.key]?.title || s.title;
+  if (runs.has(s.key)) { dialog.showMessageBox(win, { type: 'info', message: 'This chat is running right now.', detail: 'Stop it first, then delete it.' }); return; }
+  const r = process.env.CLAUDE_MULTI_TEST_CONFIRM ? { response: 1 } : await dialog.showMessageBox(win, {
+    type: 'warning', buttons: ['Cancel', 'Delete permanently'], defaultId: 0, cancelId: 0, noLink: true,
+    message: `Delete "${name}" permanently?`,
+    detail: 'This erases its history from your PC, from every engine that answered it. It cannot be undone.\n\nFiles:\n' + (s.parts || []).map((x) => x.file).join('\n'),
+  });
+  if (r.response !== 1) return;
+  try {
+    for (const x of s.parts || []) {
+      await fs.promises.rm(x.file, { force: true });
+      const side = x.engine === 'claude' ? path.join(path.dirname(x.file), x.id) : null;
+      if (side && fs.existsSync(side) && !fs.lstatSync(side).isSymbolicLink()) await fs.promises.rm(side, { recursive: true, force: true });
+    }
+  } catch (e) { dialog.showMessageBox(win, { type: 'error', message: 'Could not delete it.', detail: e.message }); return; }
+  mixed.remove(s.id);
+  delete prefs.meta[s.key]; delete prefs.chat[s.key];
+  prefs.pinOrder = prefs.pinOrder.filter((k) => k !== s.key);
+  for (const fo of prefs.folders) fo.order = fo.order.filter((k) => k !== s.key);
+  savePrefs(); pushOrg(); refreshSessions();
+  if (view?.key === s.key) { openChat('new'); send('select', 'new'); }
+}
 ipcMain.handle('export-chat', (_e, key) => exportChat(key));
 async function exportChat(key) {
   const s = sessions.find((x) => x.key === key); if (!s) return;
@@ -441,7 +546,7 @@ async function exportChat(key) {
   const safe = name.replace(/[<>:"/\\|?*\x00-\x1f]/g, '').slice(0, 80).trim() || 'chat';
   const r = process.env.CLAUDE_MULTI_TEST_CONFIRM ? { filePath: path.join(root(), 'export-test.md') } : await dialog.showSaveDialog(win, { defaultPath: path.join(app.getPath('documents'), safe + '.md'), filters: [{ name: 'Markdown', extensions: ['md'] }] });
   if (r.canceled || !r.filePath) return;
-  const items = s.engine === 'antigravity' ? (await agy.items(s.file)).items : await history.readAll(s.engine, s.file);
+  const items = s.engine === 'mixed' ? readMixed(s).items : s.engine === 'antigravity' ? (await agy.items(s.file)).items : await history.readAll(s.engine, s.file);
   const lines = [`# ${name}`, '', `${s.engine === 'codex' ? 'Codex' : 'Claude Code'} chat in ${s.cwd}`, ''];
   for (const it of items) {
     if (it.role === 'user') lines.push('## You', '', it.text, '');
@@ -465,7 +570,7 @@ ipcMain.handle('pick-folder', async () => {
   const r = await dialog.showOpenDialog(win, { properties: ['openDirectory'], defaultPath: prefs.draft.cwd });
   if (!r.canceled && r.filePaths[0]) { prefs.draft.cwd = r.filePaths[0]; savePrefs(); if (view?.key === 'new') openChat('new'); }
 });
-ipcMain.handle('reveal', (_e, key) => { const s = sessions.find((x) => x.key === key); if (s) shell.showItemInFolder(s.file); });
+ipcMain.handle('reveal', (_e, key) => { const s = sessions.find((x) => x.key === key); if (s) shell.showItemInFolder((s.parts && s.parts[0] && s.parts[0].file) || s.file); });
 
 // ---------- sending ----------
 // Pasted or dropped files: saved under the app's attachments folder; the agent is told their paths.
@@ -488,6 +593,7 @@ function promptOf(text, files) { // your words, plus the paths of anything you a
 ipcMain.handle('send', (_e, key, text, files) => {
   const prompt = promptOf(text, files);
   if (!prompt) return;
+  if (key === 'new' && !runs.has('new')) { const mk = newMixedChat(prompt); if (mk) { startRun(mk, prompt); openChat(mk); send('select', mk); return 'sent'; } }
   if (runs.has(key) || queueOf(key).length) {
     if (key === 'new') return;
     const q = enqueue(key, { prompt, by: 'you', hop: 0 });
@@ -501,6 +607,7 @@ ipcMain.handle('send', (_e, key, text, files) => {
 // message mid-reply: their reply stops, and this message goes first.
 function sayNow(key, entry, prompt) {
   if (entry.handle && entry.handle.say && !entry.done && entry.handle.say(prompt)) {
+    if (entry.turn) entry.turn.user = (entry.turn.user + '\n\n(sent while it worked) ' + prompt).slice(0, 8000);
     entry.live.said = [...(entry.live.said || []), { text: prompt, at: Date.now(), taken: false }].slice(-10);
     pushLive(key); return 'sent-now';
   }
@@ -539,21 +646,32 @@ function startRun(key, prompt, opts = {}) {
   prompt = String(prompt || '').trim();
   if (!prompt) return { error: 'Nothing to send.' };
   if (runs.has(key)) return { error: 'busy' };
-  let s = null; let p;
+  let s = null; let p; let mx = null;
   const fresh = key === 'new' || key.startsWith('new:');
   if (key === 'new') p = { ...prefs.draft };
   else if (fresh) p = { ...(opts.newChat || {}) };
+  else if (isMixed(key)) { mx = mixedOf(key); if (!mx) return { error: 'That chat is not in the list any more.' }; p = chatPrefs(key, 'mixed'); }
   else { s = sessions.find((x) => x.key === key); if (!s) return { error: 'That chat is not in the list any more.' }; p = chatPrefs(key, s.engine); }
   const acct = getAcct(p.accountId); if (!acct) return { error: 'No account is set for this chat.' };
   // phase / step / running / steps let the window say what a long run is doing right now
   // ("Running Bash: node ...", "Thinking", 31m, 112 steps), and `from` who sent it when it was another chat.
-  const live = { user: prompt, text: '', thinking: '', phase: 'starting', prep: '', account: label(acct), error: null, suggest: null, startedAt: Date.now(), step: null, running: [], sub: null, steps: 0, subSteps: 0, said: [], from: opts.from ? { key: opts.from.key, title: opts.from.title } : null };
+  const live = { user: prompt, text: '', thinking: '', phase: 'starting', prep: '', account: label(acct), engine: acct.engine, error: null, suggest: null, startedAt: Date.now(), step: null, running: [], sub: null, steps: 0, subSteps: 0, said: [], from: opts.from ? { key: opts.from.key, title: opts.from.title } : null };
   const fail = (msg) => { live.error = msg; runs.set(key, { live, handle: null, key }); pushLive(key); runs.delete(key); return { error: msg }; };
   if (s && s.legacyPb) return fail('This older Antigravity chat can only be continued in Antigravity itself.');
   if (!engine.isSignedIn(root(), acct)) return fail(`${label(acct)} is not signed in yet. Right-click it under Accounts and choose "Sign in".`);
-  const chat = fresh ? { cwd: p.cwd, mode: p.mode, model: p.model, sessionId: null } : { cwd: s.cwd, mode: p.mode, model: p.model, sessionId: s.id };
+  if (mx && !mixed.ENGINES.includes(acct.engine)) return fail(`${label(acct)} cannot answer a chat that Claude and GPT share yet: pick a Claude or Codex account.`);
+  const chat = mx ? { cwd: mx.cwd, mode: p.mode, model: p.model, sessionId: mx.sessions[acct.engine] || null }
+    : fresh ? { cwd: p.cwd, mode: p.mode, model: p.model, sessionId: null } : { cwd: s.cwd, mode: p.mode, model: p.model, sessionId: s.id };
+  // In a mixed chat the engine that answers is first told what the other engines did since it last spoke.
+  let sendPrompt = prompt;
+  if (mx) { const head = mixed.catchUp(mx, acct.engine, usDate); if (head) sendPrompt = head + '\n\n' + prompt; }
   chat.chrome = prefs.chrome !== false; chat.effort = p.effort || '';
   const entry = { live, handle: null, key, acct, p, cwd: chat.cwd, from: opts.from || null, reportBack: !!opts.reportBack, hop: opts.hop || 0, message: opts.message || '', reply: '', waiters: [], done: false };
+  if (mx) { // the turn is logged now (so its replies know who wrote them) and completed when the run ends
+    entry.mixed = { id: mx.id, engine: acct.engine, sid: chat.sessionId };
+    entry.turn = { at: live.startedAt, engine: acct.engine, accountId: acct.id, account: label(acct), model: p.model || (acct.engine === 'codex' ? engine.codexDefaultModel(root(), acct) : ''), sid: chat.sessionId, user: prompt.slice(0, 6000), reply: '', steps: [], stepCount: 0, pending: true };
+    mixed.addTurn(mx, entry.turn);
+  }
   if (acct.engine === 'claude' && bridge.port) { // this run may use the chat tools: its own key to the app's bridge
     entry.token = crypto.randomBytes(18).toString('hex');
     entry.mcpFile = path.join(root(), 'runs', 'mcp-' + entry.token.slice(0, 12) + '.json');
@@ -563,7 +681,7 @@ function startRun(key, prompt, opts = {}) {
   runs.set(key, entry); pushLive(key); pushSessions();
   const prev = procs.get(key);
   if (prev && prev.alive && prev.alive()) { try { prev.stop(); } catch { /* gone */ } }
-  try { entry.handle = engine.run(root(), { acct, chat, prompt }, (ev) => onRunEvent(entry, ev)); }
+  try { entry.handle = engine.run(root(), { acct, chat, prompt: sendPrompt }, (ev) => onRunEvent(entry, ev)); }
   catch (e) { finishRun(entry, { error: 'Could not start: ' + (e && e.message || e) }); return { error: String(e && e.message || e) }; }
   return { entry };
 }
@@ -572,9 +690,15 @@ function onRunEvent(entry, ev) {
   const live = entry.live; const acct = entry.acct;
   if (ev.kind === 'session') {
     procs.set(acct.engine + ':' + ev.id, entry.handle);
+    if (entry.mixed) {
+      if (!entry.mixed.sid) { entry.mixed.sid = ev.id; const m = mixed.get(entry.mixed.id); if (m) { mixed.setSession(m, acct.engine, ev.id); if (entry.turn) { entry.turn.sid = ev.id; mixed.save(m); } } setTimeout(refreshSessions, 1200); }
+      return;
+    }
     if (entry.key === 'new' || entry.key.startsWith('new:')) adoptNewChat(entry, ev.id);
     return;
   }
+  if (ev.kind === 'retired') { if (!prefs.hiddenChats) prefs.hiddenChats = {}; prefs.hiddenChats[ev.engine + ':' + ev.id] = Date.now(); savePrefs(); return; } // a refused attempt's empty thread
+  if (ev.kind === 'model') { if (entry.turn) { entry.turn.model = ev.model; const m = mixed.get(entry.mixed.id); if (m) mixed.save(m); } return; }
   if (ev.kind === 'usage') { mergeRunUsage(acct.id, ev.usage); return; } // the limits this run reports, folded in live
   if (ev.kind === 'ask') { // Claude Code asks you something (a question, a permission, a plan): show it, ping you if you are elsewhere
     live.ask = { id: ev.id, tool: ev.tool, input: ev.input, detail: ev.detail, kind: ev.tool === 'AskUserQuestion' ? 'question' : ev.tool === 'ExitPlanMode' ? 'plan' : 'permission' };
@@ -597,6 +721,7 @@ function onRunEvent(entry, ev) {
     if (ev.sub) { live.sub = step; live.subSteps += 1; } // a helper agent's step, shown under its Agent step
     else {
       live.step = step; live.steps += 1; entry.reply = '';
+      if (entry.turn) { entry.turn.stepCount += 1; if (entry.turn.steps.length < 40) entry.turn.steps.push((step.name + ' ' + step.detail.slice(0, 80)).trim()); }
       if (!ev.done) { live.running = [...live.running.filter((x) => !step.id || x.id !== step.id), step].slice(-8); live.phase = 'tool'; }
     }
   } else if (ev.kind === 'tool-done') {
@@ -634,10 +759,15 @@ function adoptNewChat(entry, id) {
 function finishRun(entry, ev) {
   if (entry.done) return;
   entry.done = true;
+  if (entry.turn) {
+    Object.assign(entry.turn, { reply: String(entry.reply || '').slice(0, 8000), error: ev.error === 'Stopped.' ? 'stopped by the user' : ev.error ? String(ev.error).slice(0, 500) : '', pending: false, ended: Date.now() });
+    const m = mixed.get(entry.mixed.id); if (m) mixed.save(m);
+  }
   const live = entry.live; const acct = entry.acct; const key = entry.key;
   live.ask = null;
   if (runs.get(key) === entry) runs.delete(key);
   if (entry.token) { runTokens.delete(entry.token); try { fs.unlinkSync(entry.mcpFile); } catch { /* gone */ } }
+  for (const h of entry.helpers || []) { try { h.stop(); } catch { /* gone */ } } // its helpers stop with it
   lastRunEnd.set(key, Date.now());
   if (restartWhenIdle && !runs.size) setTimeout(() => { if (!runs.size) restartApp(); }, 3000); // the update you asked for
   if (acct.engine === 'codex') { const cs = sessions.find((x) => x.key === key); if (cs) setUsage(acct.id, engine.codexUsage(cs.file)); }
@@ -675,7 +805,7 @@ const bridge = { port: 0 };
 const runTokens = new Map(); // a run's key -> its entry
 const MAX_HOPS = 6;          // chats messaging each other in a row before it is treated as a loop
 const relays = [];           // when chat-to-chat messages went out (at most 40 in 10 minutes)
-const ENGINE_LABEL = { claude: 'Claude', codex: 'Codex', antigravity: 'Gemini' };
+const ENGINE_LABEL = { claude: 'Claude', codex: 'Codex', antigravity: 'Gemini', mixed: 'Claude and GPT (mixed)' };
 function startBridge() {
   try { // keys of runs from before a restart are dead: remove their files
     const d = path.join(root(), 'runs');
@@ -702,6 +832,7 @@ async function bridgeTool(entry, tool, args) {
   if (tool === 'read_chat') return { text: await readChatText(args) };
   if (tool === 'send_message') return sendMessageTool(entry, args);
   if (tool === 'start_chat') return startChatTool(entry, args);
+  if (tool === 'run_agent') return runAgentTool(entry, args);
   return { error: 'Unknown tool: ' + tool };
 }
 const titleFor = (key) => { const real = renamed.get(key) || key; const s = sessions.find((x) => x.key === real); return (prefs.meta[real] && prefs.meta[real].title) || (s && s.title) || (real.startsWith('new') ? 'a new chat' : real); };
@@ -710,7 +841,7 @@ const clipText = (t, n) => { t = String(t || '').trim(); return t.length > n ? t
 const usDate = (ms) => (ms ? new Date(ms).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : 'unknown');
 const lastRunEnd = new Map(); // chat key -> when a run of ours there ended (its own last writes are not "someone else")
 function busyElsewhere(s) { // written to lately by something other than this app (the Claude app, a terminal, Antigravity)
-  if (!s || runs.has(s.key)) return false;
+  if (!s || runs.has(s.key) || s.engine === 'mixed') return false;
   if (s.engine === 'antigravity') return !!s.agyRunning;
   let mt = s.mtime || s.updated; try { mt = fs.statSync(s.file).mtimeMs; } catch { /* gone */ }
   const ours = lastRunEnd.get(s.key); if (ours && mt <= ours + 5000) return false;
@@ -747,7 +878,7 @@ function listChatsText(entry, args) {
 async function readChatText(args) {
   const r = resolveChat(args.chat); if (r.error) throw new Error(r.error);
   const s = r.s; const n = Math.max(1, Math.min(60, Number(args.last) || 12));
-  const items = s.engine === 'antigravity' ? (await agy.items(s.file)).items : history.readBefore(s.engine, s.file).items;
+  const items = s.engine === 'mixed' ? readMixed(s).items : s.engine === 'antigravity' ? (await agy.items(s.file)).items : history.readBefore(s.engine, s.file).items;
   const blocks = []; let steps = [];
   const flush = () => { if (steps.length) { blocks.push({ text: `[${steps.length} step${steps.length === 1 ? '' : 's'}: ${[...new Set(steps)].slice(0, 8).join(', ')}]` }); steps = []; } };
   for (const it of items) {
@@ -813,6 +944,48 @@ async function startChatTool(entry, args) {
   const key = await new Promise((res) => { st.entry.waiters.push(res); setTimeout(() => res(null), 25000); });
   const name = newChat.title || 'a new chat';
   return { text: `Started ${key ? `"${name}" (${key})` : name} in ${cwd}, answered by ${label(acct)}. It is working now${reportBack ? '; its final reply comes back to this chat as a new message after it finishes (after this turn ends)' : ''}.` };
+}
+// ---------- helpers: another engine as a sub-agent (run_agent) ----------
+// Claude orchestrates, and hands a self-contained task to GPT (Codex) or to Claude on another account; the
+// helper works in the same folder, never with more than this chat may do, and its answer comes back as
+// the tool's result. Its steps show live under the run's own line ("↳ GPT ...: Shell npm test"). A
+// helper gets no chat tools itself (no key to the bridge), so helpers cannot spawn helpers. At most three
+// run at once (each is a whole CLI process; this PC is short of memory). Its chat is not saved: one task.
+const helpers = new Set();
+const fmtSecs = (ms) => { const sec = Math.round(ms / 1000); return sec < 60 ? sec + 's' : Math.floor(sec / 60) + 'm ' + String(sec % 60).padStart(2, '0') + 's'; };
+function runAgentTool(entry, args) {
+  const task = String(args.task || args.prompt || args.message || '').trim(); // a model sometimes names it prompt
+  if (!task) return { error: 'Say what the helper should do (task): the whole task, standing on its own.' };
+  if (helpers.size >= 3) return { error: 'Three helpers are already working. Wait for one to finish, then try again.' };
+  const eng = String(args.engine || 'codex').toLowerCase().startsWith('c') && !/codex|gpt/i.test(String(args.engine)) ? 'claude' : 'codex';
+  let acct = args.account ? findAccount(args.account) : getAcct(prefs.lastAccount[eng]) || prefs.accounts.find((a) => a.engine === eng);
+  if (!acct || acct.engine !== eng) return { error: `No ${eng === 'codex' ? 'Codex (GPT)' : 'Claude'} account${args.account ? ' "' + args.account + '"' : ''}. The accounts are: ${prefs.accounts.map((a) => label(a) + ' (' + (ENGINE_LABEL[a.engine] || a.engine) + ')').join(', ')}.` };
+  if (!engine.isSignedIn(root(), acct)) return { error: `${label(acct)} is not signed in.` };
+  const parentMode = (entry.p && entry.p.mode) || 'edit';
+  const mode = args.read_only || parentMode === 'ask' ? 'ask' : parentMode; // never more than this chat may do
+  const chat = { cwd: entry.cwd, mode, model: String(args.model || '').replace(/[^\w.:\-[\]]/g, ''), sessionId: null, chrome: false, effort: '', ephemeral: true };
+  const name = eng === 'codex' ? 'GPT' : 'Claude';
+  const t0 = Date.now(); const steps = []; let reply = ''; let model = chat.model;
+  return new Promise((resolve) => {
+    let h = null;
+    const done = (out) => { helpers.delete(h); if (entry.helpers) entry.helpers.delete(h); if (!entry.done) { entry.live.sub = null; pushLive(entry.key); } resolve(out); };
+    try {
+      h = engine.run(root(), { acct, chat, prompt: task }, (ev) => {
+        if (ev.kind === 'model') model = ev.model;
+        else if (ev.kind === 'tool' && !ev.sub) {
+          steps.push((ev.name + ' ' + String(ev.detail || '').slice(0, 80)).trim()); reply = '';
+          if (!entry.done) { entry.live.sub = { name: name + ': ' + ev.name, detail: String(ev.detail || '').slice(0, 160), id: '', at: Date.now() }; entry.live.subSteps = (entry.live.subSteps || 0) + 1; pushLiveSoon(entry); }
+        } else if (ev.kind === 'text' && !ev.partial) reply = reply ? reply + '\n\n' + ev.text : String(ev.text || '');
+        else if (ev.kind === 'done') {
+          const head = `[Tasmeer Multi helper: ${name}${model ? ' (' + model + ')' : ''} on ${label(acct)}, ${steps.length} step${steps.length === 1 ? '' : 's'}, ${fmtSecs(Date.now() - t0)}${mode === 'ask' ? ', read-only' : ''}]`;
+          const list = steps.length ? '\n\nSteps it ran: ' + steps.slice(0, 30).join('; ') + (steps.length > 30 ? '; ...' : '') : '';
+          if (ev.error && !reply) done({ error: `${head} It stopped: ${ev.error}` });
+          else done({ text: `${head}\n\n${reply.trim() || '(It wrote no answer.)'}${ev.error ? '\n\n(It stopped early: ' + ev.error + ')' : ''}${list}` });
+        }
+      });
+    } catch (e) { done({ error: 'Could not start the helper: ' + (e && e.message || e) }); return; }
+    helpers.add(h); (entry.helpers || (entry.helpers = new Set())).add(h);
+  });
 }
 // A message that waits for its chat. prefs.queue keeps them through a restart.
 function enqueue(key, item) {
@@ -1014,6 +1187,8 @@ app.on('second-instance', () => { if (win) { if (win.isMinimized()) win.restore(
 app.whenReady().then(() => {
   loadPrefs();
   history.loadCache(path.join(root(), 'index-cache.json'));
+  mixed.init(root());
+  for (const m of mixed.all()) for (const t of m.turns) if (t.pending) { t.pending = false; if (!t.error) t.error = 'cut off when the app closed'; } // a run the app never saw end
   for (const a of prefs.accounts) if (!a.main) { try { engine.prepare(root(), a); } catch (e) { console.error(e); } }
   startBridge();
   createWindow();

@@ -54,6 +54,7 @@
   const S = (key, title, ago, cwd, extra = {}) => ({ key, engine: key.split(':')[0], id: key.split(':')[1], title, cwd, updated: now - ago, running: false, active: false, done: false, ...extra });
   let sessions = [
     S('claude:desk', 'Release checklist, morning run (backend first, then the web app)', 20e3, HOME + '\\code\\ops', { running: true }),
+    S('mixed:demo', 'Fix the flaky upload test, then review the fix', 90e3, HOME + '\\code\\shop-api', { engines: ['claude', 'codex'] }),
     S('claude:long', 'Unslop the Tasmeer Multi window: one signature, springs, every state', 3 * MIN, HOME + '\\tasmeer-multi'),
     S('codex:mail', 'Fix the upload path on Windows', 12 * MIN, HOME + '\\code\\mailer', { done: true }),
     S('antigravity:voice', 'Most Powerful Gemini Model', 47 * MIN, HOME + '\\code\\ops'),
@@ -154,6 +155,21 @@
       ...tools([['Grep', '"reviewer" in PRs since Nov 20'], ['Read', 'PR 3184 description']], 11 * MIN, 30e3),
       { role: 'tool', name: 'Bash', detail: 'node scripts/orphan-sweep.cjs --prs 17 --since "Nov 23, 9:00 AM"', ts: iso(47e3), id: 'run-1' },
     ],
+    'mixed:demo': [
+      { role: 'user', text: 'The upload test fails about one run in five. Find out why and fix it.', ts: iso(26 * MIN), via: 'Tasmeer Multi' },
+      { role: 'thinking', text: 'A test that fails one run in five usually races something. Read the test first, then the upload handler.', ts: iso(25.9 * MIN), who: { engine: 'claude', account: 'main@example.com', model: 'claude-opus-5-5' } },
+      { role: 'tool', name: 'Read', detail: HOME + '\\code\\shop-api\\test\\upload.test.js', ts: iso(25.8 * MIN), who: { engine: 'claude', account: 'main@example.com', model: 'claude-opus-5-5' } },
+      { role: 'tool', name: 'Bash', detail: 'npm test -- upload --repeat 20', ts: iso(25 * MIN), who: { engine: 'claude', account: 'main@example.com', model: 'claude-opus-5-5' } },
+      { role: 'tool', name: 'Edit', detail: HOME + '\\code\\shop-api\\src\\upload.js', ts: iso(22 * MIN), who: { engine: 'claude', account: 'main@example.com', model: 'claude-opus-5-5' } },
+      { role: 'assistant', text: 'The test read the file before the write had finished. `saveUpload` now waits for the stream to close; 20 runs in a row pass.', ts: iso(21 * MIN), model: 'claude-opus-5-5', who: { engine: 'claude', account: 'main@example.com', model: 'claude-opus-5-5' } },
+      { role: 'user', text: 'GPT, review that fix. Anything Claude missed?', ts: iso(12 * MIN), via: 'Tasmeer Multi', caughtUp: true },
+      { role: 'tool', name: 'shell', detail: 'git diff src/upload.js', ts: iso(11.8 * MIN), who: { engine: 'codex', account: 'main@example.com', model: 'gpt-5.5' } },
+      { role: 'tool', name: 'shell', detail: 'rg "saveUpload" src test', ts: iso(11.5 * MIN), who: { engine: 'codex', account: 'main@example.com', model: 'gpt-5.5' } },
+      { role: 'assistant', text: 'The fix is right for uploads, but `saveAvatar` has the same race: it also reads before the stream closes. Same one-line change there.', ts: iso(10 * MIN), who: { engine: 'codex', account: 'main@example.com', model: 'gpt-5.5' } },
+      { role: 'user', text: 'Claude, apply that to saveAvatar too.', ts: iso(3 * MIN), via: 'Tasmeer Multi', caughtUp: true },
+      { role: 'tool', name: 'Edit', detail: HOME + '\\code\\shop-api\\src\\avatar.js', ts: iso(2.6 * MIN), who: { engine: 'claude', account: 'work@example.com', model: 'claude-opus-5-5' } },
+      { role: 'assistant', text: 'Done: `saveAvatar` waits for the stream too, and the avatar tests pass 20 times in a row.', ts: iso(90e3), model: 'claude-opus-5-5', who: { engine: 'claude', account: 'work@example.com', model: 'claude-opus-5-5' } },
+    ],
     'claude:g1': [
       { role: 'user', text: 'review the three real sign-ups from this morning and tell me what broke', ts: iso(30 * MIN), via: 'Tasmeer Multi' },
       ...tools([['Read', 'sign-ups 641, 642, 645'], ['Bash', 'node scripts/signup-check.cjs --since 9:00']], 29 * MIN, 60e3),
@@ -239,6 +255,7 @@
   const prefsBy = {
     new: { accountId: 'c-main', mode: 'full', model: '', effort: '', cwd: HOME + '\\code\\ops' },
     'claude:long': { accountId: 'c-main', mode: 'full', model: '', effort: '' },
+    'mixed:demo': { accountId: 'x-main', mode: 'full', model: '', effort: '' },
     'claude:desk': { accountId: 'c-tc', mode: 'full', model: '', effort: 'high' },
     'claude:err': { accountId: 'c-team', mode: 'full', model: '', effort: '' },
     'antigravity:voice': { accountId: 'g-main', mode: 'full', model: '', effort: '' },
@@ -247,7 +264,7 @@
 
   // ---------- what the app asks for ----------
   if (state === 'empty') { accounts = []; sessions = []; }
-  const START = { new: 'new', modal: 'new', empty: 'new', 'chat-working': 'claude:desk', 'run-think': 'claude:desk', 'run-agent': 'claude:desk', now: 'claude:desk', relay: 'claude:g1', error: 'claude:err', voice: 'antigravity:voice' }[state] || 'claude:long';
+  const START = { mixed: 'mixed:demo', 'mixed-menu': 'mixed:demo', 'mixed-test': 'mixed:demo', new: 'new', modal: 'new', empty: 'new', 'chat-working': 'claude:desk', 'run-think': 'claude:desk', 'run-agent': 'claude:desk', now: 'claude:desk', relay: 'claude:g1', error: 'claude:err', voice: 'antigravity:voice' }[state] || 'claude:long';
   let firstOpen = true; let view = null;
   function open(key) {
     if (firstOpen && key === 'new') key = START;
@@ -368,6 +385,7 @@
     slash: () => typeInto('/un', 10),
     now: () => typeInto('also add the release date to the page', 5), // a reply runs and you type: Send now shows
     menu: () => $('.acct-pick .dd-btn')?.click(),
+    'mixed-menu': () => $('.acct-pick .dd-btn')?.click(), // a chat Claude and GPT share: both kinds of account to pick from
     modal: () => $('#add-acct')?.click(),
     voice: () => $('#input')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })),
     attach: async () => {
@@ -465,6 +483,37 @@
       document.querySelector('#log .queued .q-now')?.click(); await wait(200);
       r.queuedSentNow = (window.__sentNow || [])[1]; r.queueEmpty = !document.querySelector('#log .queued');
       window.__nowResult = r; console.log('NOW ' + JSON.stringify(r));
+    },
+    // A chat Claude and GPT share (Nov 25, 2026): its picker offers Claude and Codex accounts, each reply
+    // says who wrote it, and a run names the engine answering, with Send now matching that engine.
+    'mixed-test': async () => {
+      const r = {}; const key = 'mixed:demo'; const inp = $('#input'); const btn = () => $('#go-now');
+      const whoText = () => document.querySelector('#log .msg.assistant.live .who-text')?.textContent || '';
+      r.pickerGroups = [...document.querySelectorAll('#acct optgroup')].map((g) => g.label + ' ' + g.children.length);
+      r.whoLines = [...document.querySelectorAll('#log .turn-who .tw-name')].map((x) => x.textContent);
+      r.caughtUpStamps = [...document.querySelectorAll('#log .user-wrap .stamp')].filter((x) => /what the other agent did/.test(x.textContent)).length;
+      r.listMark = document.querySelector('#chats [data-key="mixed:demo"] .emark')?.className || '';
+      document.querySelector('#filter [data-f="codex"]')?.click(); await wait(100);
+      r.inCodexFilter = !!document.querySelector('#chats [data-key="mixed:demo"]');
+      document.querySelector('#filter [data-f="claude"]')?.click(); await wait(100);
+      r.inClaudeFilter = !!document.querySelector('#chats [data-key="mixed:demo"]');
+      document.querySelector('#filter [data-f="all"]')?.click(); await wait(100);
+      r.hintOnGpt = inp.dataset.idle;
+      const sel = $('#acct'); sel.value = 'c-main'; sel.dispatchEvent(new Event('change', { bubbles: true })); await wait(150);
+      r.hintOnClaude = inp.dataset.idle; r.modelOnClaude = $('#model').selectedOptions[0]?.textContent || '';
+      // GPT answering: the line names it, and the button stops its reply to send yours
+      lives[key] = { user: 'GPT, check the avatar tests too', text: '', phase: 'tool', running: [], step: null, steps: 0, account: 'main@example.com', engine: 'codex', startedAt: Date.now(), said: [] };
+      emit('live', { key, live: { ...lives[key] } }); await wait(150);
+      inp.value = 'and the banner'; inp.dispatchEvent(new Event('input', { bubbles: true })); await wait(50);
+      r.gptLine = whoText(); r.gptButton = btn().hidden ? '(hidden)' : btn().textContent;
+      delete lives[key]; emit('live', { key, live: null }); await wait(150);
+      // Claude answering: the button sends into its reply
+      lives[key] = { user: 'Claude, check the banner too', text: '', phase: 'tool', running: [], step: null, steps: 0, account: 'main@example.com', engine: 'claude', startedAt: Date.now(), said: [] };
+      emit('live', { key, live: { ...lives[key] } }); await wait(150);
+      inp.dispatchEvent(new Event('input', { bubbles: true })); await wait(50);
+      r.claudeLine = whoText(); r.claudeButton = btn().hidden ? '(hidden)' : btn().textContent;
+      delete lives[key]; emit('live', { key, live: null }); inp.value = ''; inp.dispatchEvent(new Event('input', { bubbles: true }));
+      window.__mixedResult = r; console.log('MIXED ' + JSON.stringify(r));
     },
     // what a run asks you: one click answers one question; several questions, a typed answer that
     // survives a redraw, and a permission denied with a reason

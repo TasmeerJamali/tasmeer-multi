@@ -74,13 +74,28 @@ const CHAT_TOOLS = [{
     required: ['prompt'],
   },
 }];
+CHAT_TOOLS.push({
+  name: 'run_agent',
+  description: "Hand a task to another AI agent the user has connected in Tasmeer Multi and wait for its answer: GPT (OpenAI Codex), or Claude on another of the user's accounts. It works in this same folder with this chat's permissions (or read-only), sees none of this conversation, so write the task to stand on its own (what to do, which files, what to report back), and returns its final answer plus the steps it ran. This is Tasmeer Multi's cross-engine version of the Agent tool: use it when the user asks for GPT, Codex or another agent, for a second opinion from a different model, or to split work; you can call it several times at once to run helpers in parallel (at most three).",
+  inputSchema: {
+    type: 'object',
+    properties: {
+      task: { type: 'string', description: 'The whole task, standing on its own.' },
+      engine: { type: 'string', enum: ['codex', 'claude'], description: 'codex (GPT, the default) or claude.' },
+      account: { type: 'string', description: "An account email. Default: that engine's usual account." },
+      model: { type: 'string', description: 'A model id, if the user asked for one. Default: one that works on that account.' },
+      read_only: { type: 'boolean', description: 'true: it may read but not change anything. Default: the same permissions as this chat.' },
+    },
+    required: ['task'],
+  },
+});
 if (BRIDGE) TOOLS.push(...CHAT_TOOLS);
 
 const text = (t, isError) => ({ content: [{ type: 'text', text: String(t) }], ...(isError ? { isError: true } : {}) });
-function askApp(tool, args) { // one call to the app's local bridge
+function askApp(tool, args) { // one call to the app's local bridge (a helper agent may work for up to an hour)
   return new Promise((resolve) => {
     const body = JSON.stringify({ token: TOKEN, tool, args: args || {} });
-    const req = http.request({ host: '127.0.0.1', port: PORT, path: '/tool', method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }, timeout: 60000 }, (res) => {
+    const req = http.request({ host: '127.0.0.1', port: PORT, path: '/tool', method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }, timeout: tool === 'run_agent' ? 3600000 : 60000 }, (res) => {
       let out = ''; res.setEncoding('utf8');
       res.on('data', (d) => { out += d; });
       res.on('end', () => { let j = null; try { j = JSON.parse(out); } catch { /* not JSON */ } resolve(j && j.text ? text(j.text) : text((j && j.error) || `Tasmeer Multi did not answer (HTTP ${res.statusCode}).`, true)); });

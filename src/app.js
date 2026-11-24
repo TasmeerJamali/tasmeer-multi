@@ -18,7 +18,11 @@ const ranHere = {};      // key -> last time this app was running it
 const held = {};         // key -> { text, at }: streamed words kept on screen until their saved copy arrives
 const liveTextAt = {};   // key -> when streamed words were last on screen
 
-const ENGINE_NAME = { claude: 'Claude', codex: 'Codex', antigravity: 'Gemini' };
+const ENGINE_NAME = { claude: 'Claude', codex: 'Codex', antigravity: 'Gemini', mixed: 'Claude and GPT' };
+// the engine answering a chat right now: in a chat Claude and GPT share, whichever account the run is on
+const runEngine = (k) => (lives[k] && lives[k].engine) || (cur && cur.key === k ? cur.engine : '');
+// an account's name where it can be ambiguous: a shared chat may have the same address on Claude and on Codex
+const seatName = (labelText, eng) => (cur && cur.engine === 'mixed' && eng ? `${labelText} (${eng === 'codex' ? 'GPT' : 'Claude'})` : labelText);
 const acctById = (id) => accounts.find((a) => a.id === id);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 function ago(ms) {
@@ -168,7 +172,7 @@ function renderSide() {
   bar.append(dropTarget(pinT, (k) => M.organise({ kind: 'move', key: k, to: 'pinned' })), dropTarget(folderT, (k) => askFolder(k)));
   box.append(bar);
   const q = query.toLowerCase();
-  const match = (s) => (filter === 'all' || filter === 'star' || filter === 'archived' || s.engine === filter)
+  const match = (s) => (filter === 'all' || filter === 'star' || filter === 'archived' || s.engine === filter || (s.engine === 'mixed' && (s.engines || []).includes(filter)))
     && (filter !== 'star' || metaOf(s.key).star)
     && (filter === 'archived' ? metaOf(s.key).archived : !metaOf(s.key).archived)
     && (!q || titleOf(s).toLowerCase().includes(q) || s.cwd.toLowerCase().includes(q));
@@ -279,9 +283,10 @@ function groupItems(items) {
     if (it.role === 'model') continue;
     const t = tsOf(it);
     if (it.role === 'note') { block = null; out.push({ kind: 'note', text: it.text, ts: it.ts, voice: !!it.voice }); }
-    else if (it.role === 'user') { block = null; out.push({ kind: 'user', text: it.text, ts: it.ts, via: it.via, midRun: !!it.midRun }); }
+    else if (it.role === 'user') { block = null; out.push({ kind: 'user', text: it.text, ts: it.ts, via: it.via, midRun: !!it.midRun, caughtUp: !!it.caughtUp }); }
     else {
-      if (!block) { block = { kind: 'assistant', parts: [] }; out.push(block); }
+      if (!block) { block = { kind: 'assistant', parts: [], who: it.who || null }; out.push(block); }
+      else if (it.who && block.who && it.who.engine !== block.who.engine) { block = { kind: 'assistant', parts: [], who: it.who }; out.push(block); } // the other engine took over
       if (it.ts) block.ts = it.ts;
       const last = block.parts[block.parts.length - 1];
       if (it.role === 'tool' || it.role === 'thinking') { // thinking folds in with the steps around it
@@ -304,7 +309,7 @@ function groupItems(items) {
 }
 // Tool names as people read them: the app's own chat tools by what they do, other MCP tools by name
 // and server ("navigate (Chrome)"), Claude Code's own tools as they are (Bash, Read, Edit).
-const TM_TOOL = { send_message: 'Message a chat', start_chat: 'Start a chat', list_chats: 'List chats', read_chat: 'Read a chat', send_user_file: 'Show files' };
+const TM_TOOL = { send_message: 'Message a chat', start_chat: 'Start a chat', list_chats: 'List chats', read_chat: 'Read a chat', send_user_file: 'Show files', run_agent: 'Ask another agent' };
 function niceTool(name) {
   const n = String(name || 'step'); const parts = n.split('__');
   if (parts[0] !== 'mcp' || parts.length < 3) return n;
@@ -494,6 +499,17 @@ function buildChoice(card, a, reply, title, noLabel, yesLabel) { // a permission
 
 // The message list is built once per chat. New messages only redraw the last block, and the
 // "is working" box redraws alone, so a long chat does not get rebuilt on every update.
+// Who wrote a reply in a mixed chat: the engine's mark, the model, the account.
+function whoLine(w) {
+  const d = el('div', 'turn-who');
+  // a GPT model by Codex's own name for it, as the model picker shows it ("GPT-6-Sol")
+  const listed = w.engine === 'codex' && w.model ? (accounts.flatMap((a) => (a.engine === 'codex' && a.models && a.models.options) || []).find((o) => o.value === w.model) || {}).label : '';
+  const model = w.model ? listed || niceModel(w.model) : '';
+  const name = w.engine === 'codex' ? (model ? model + ' (Codex)' : 'GPT (Codex)') : 'Claude' + (model ? ' ' + model.replace(/^Claude /, '') : '');
+  d.append(el('span', 'emark ' + w.engine), el('span', 'tw-name', name));
+  if (w.account) d.append(el('span', 'tw-acct', w.account));
+  return d;
+}
 function partNode(p) { // one piece of a reply: steps, files, a question, a plan, a message to a chat, or words
   if (p.kind === 'tools') return renderTools(p);
   if (p.kind === 'files') return renderFiles(p);
@@ -521,10 +537,12 @@ function blockNode(b) {
     const m = el('div', 'msg user', text.length > 6000 ? text.slice(0, 6000) + '\n...' : text); m.dataset.fit = '';
     w.append(m);
     const via = rel || b.midRun ? '' : b.via; // a message from another chat says so above it, not "sent from headless"
-    if (b.ts || via || b.midRun) w.append(el('div', 'stamp', [b.ts ? when(b.ts) : '', b.midRun ? 'sent while it worked' : via ? 'sent from ' + via : ''].filter(Boolean).join(', ')));
+    const told = b.caughtUp ? 'with what the other agent did since' : ''; // a mixed chat: the app passed the other engine's turns along
+    if (b.ts || via || b.midRun || told) { const st = el('div', 'stamp', [b.ts ? when(b.ts) : '', b.midRun ? 'sent while it worked' : via ? 'sent from ' + via : '', told].filter(Boolean).join(', ')); if (told) st.title = 'Tasmeer Multi put a short account of the turns this agent did not see in front of your message'; w.append(st); }
     return w;
   }
   const box = el('div', 'msg assistant blk'); box.dataset.fit = '';
+  if (b.who && cur && cur.engine === 'mixed') box.append(whoLine(b.who)); // a chat Claude and GPT share: who wrote this reply
   for (const p of b.parts) { const n = partNode(p); if (n) box.append(n); }
   const texts = b.parts.filter((p) => p.kind === 'text' && p.text).map((p) => p.text);
   if (b.ts || texts.length) {
@@ -617,7 +635,7 @@ function queueNodes(k) { // your messages (and other chats') waiting for this ch
     x.onclick = async () => { x.disabled = true; const t = await M.unqueue(k, q.id); if (t && cur && cur.key === k && !input.value.trim()) { input.value = t; grow(); saveDraft(); input.focus(); } };
     if (M.queueSendNow) { // or send it now, into the reply that is running
       const now = el('button', 'q-now', 'Send now'); now.type = 'button';
-      now.title = cur && cur.engine === 'claude' ? 'Send it into the reply that is running: Claude reads it after the step it is on' : 'Stop this reply and send it now';
+      now.title = runEngine(k) === 'claude' ? 'Send it into the reply that is running: Claude reads it after the step it is on' : 'Stop this reply and send it now';
       now.onclick = async () => { now.disabled = true; x.disabled = true; await M.queueSendNow(k, q.id); };
       row.append(now);
     }
@@ -667,10 +685,11 @@ function liveNodes() {
     }
   }
   const box = el('div', 'msg assistant live live-part');
-  const acc = accounts.find((x) => x.label === live.account) || { id: 'live:' + live.account, label: live.account || '?', engine: cur.engine };
+  const acc = accounts.find((x) => x.label === live.account && (!live.engine || x.engine === live.engine)) || accounts.find((x) => x.label === live.account) || { id: 'live:' + live.account, label: live.account || '?', engine: live.engine || cur.engine };
   const who = el('div', 'who');
   const tok = T.make(acc, 16, { busy: working }); inPhase(tok.querySelector('.seat-busy'), 1100);
-  who.append(tok, el('span', 'who-text' + (asking ? ' asking' : ''), asking ? `${live.account} ${live.ask.kind === 'question' ? 'is asking you' : 'needs your OK'}` : working ? `${live.account} is working` : live.account || ''));
+  const seat = seatName(live.account || '', live.engine);
+  who.append(tok, el('span', 'who-text' + (asking ? ' asking' : ''), asking ? `${seat} ${live.ask.kind === 'question' ? 'is asking you' : 'needs your OK'}` : working ? `${seat} is working` : seat));
   // how long it has been going and how many steps it took, so a long run reads as alive, not stuck
   if (busy && live.startedAt) {
     const m = el('span', 'who-meta', runMeta(live)); m.dataset.since = String(live.startedAt); m.dataset.steps = String(live.steps || 0);
@@ -768,7 +787,8 @@ function renderCrumbMark() {
 }
 function renderHead() {
   // The model that really wrote the last reply, read from the chat file itself.
-  const lastModel = cur ? [...cur.items].reverse().find((i) => i.model && i.model !== '<synthetic>') : null;
+  // in a mixed chat, the model of whichever engine wrote last (a Codex reply carries it in its "who")
+  const lastModel = cur ? [...cur.items].reverse().map((i) => (cur.engine === 'mixed' && i.who ? (i.who.model ? { model: i.who.model } : null) : i.model && i.model !== '<synthetic>' ? i : null)).find(Boolean) : null;
   const ran = $('#ran'); ran.hidden = !lastModel;
   if (lastModel) { ran.textContent = 'last reply: ' + niceModel(lastModel.model) + (lastModel.effort ? ', ' + lastModel.effort : ''); ran.title = 'Read from the chat file: ' + lastModel.model + (lastModel.effort ? ', effort ' + lastModel.effort : ''); }
   const isNew = isNewChat();
@@ -792,7 +812,8 @@ let pickTok = null; // the seat token in the message box: springs when the accou
 function renderPicker() {
   const sel = $('#acct'); sel.textContent = '';
   const isNew = isNewChat();
-  const engs = isNew ? ['claude', 'codex', 'antigravity'] : [cur.engine]; // an existing chat continues on accounts of its own kind
+  // an existing chat continues on accounts of its own kind; a mixed chat on any Claude or Codex account
+  const engs = isNew ? ['claude', 'codex', 'antigravity'] : cur.engine === 'mixed' ? ['claude', 'codex'] : [cur.engine];
   for (const eng of engs) {
     const g = document.createElement('optgroup');
     g.label = { claude: 'Claude Code accounts', codex: 'Codex accounts', antigravity: 'Gemini (Antigravity)' }[eng];
@@ -812,7 +833,7 @@ function renderPicker() {
   renderModels(acct); renderEfforts(acct); applyChrome(); renderUsageLine(acct); renderCrumbMark();
   if (window.syncDropdowns) window.syncDropdowns();
   const slashOk = acct?.engine === 'claude' ? ', / for skills' : '';
-  $('#input').dataset.idle = isNew ? `Ask ${ENGINE_NAME[acct?.engine] || 'Claude'} anything${slashOk}` : `Reply as ${acct?.label || ''}${slashOk}`;
+  $('#input').dataset.idle = isNew ? `Ask ${ENGINE_NAME[acct?.engine] || 'Claude'} anything${slashOk}` : `Reply as ${seatName(acct?.label || '', acct?.engine)}${slashOk}`;
   $('#input').placeholder = $('#input').dataset.idle;
   renderSend();
   // A chat that something else is writing to right now (Orca, a terminal, the desktop app).
@@ -835,7 +856,7 @@ function renderSend() {
   // Send now, next to it while a reply runs: into that reply (Claude), or stop it and send (Codex, Gemini)
   const now = $('#go-now');
   if (now) {
-    const claude = !!(cur && cur.engine === 'claude');
+    const claude = !!(cur && runEngine(cur.key) === 'claude');
     now.hidden = !(running && typed && cur && cur.key !== 'new' && M.sendNow);
     now.textContent = claude ? 'Send now' : 'Stop and send';
     now.title = claude ? 'Claude reads it after the step it is on, without waiting for this reply to finish (Ctrl+Enter)' : 'Stops this reply and sends yours right away (Ctrl+Enter)';
