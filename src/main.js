@@ -22,6 +22,7 @@ if (process.env.CLAUDE_MULTI_DATA) app.setPath('userData', process.env.CLAUDE_MU
 if (!app.requestSingleInstanceLock()) app.quit();
 
 const root = () => app.getPath('userData');
+const APP_ICON = path.join(__dirname, '..', 'build', 'icon.ico'); // the window and taskbar icon (tools/make-icon.cjs draws it)
 const prefsFile = () => path.join(root(), 'prefs.json');
 const newId = () => crypto.randomBytes(6).toString('hex');
 
@@ -1183,7 +1184,7 @@ ipcMain.handle('open-external', (_e, url) => { if (/^https?:\/\//.test(url)) she
 // ---------- window ----------
 function createWindow() {
   win = new BrowserWindow({
-    ...(prefs.bounds || { width: 1320, height: 880 }), show: !process.env.CLAUDE_MULTI_SHOT, minWidth: 760, minHeight: 480, title: 'Tasmeer Multi',
+    ...(prefs.bounds || { width: 1320, height: 880 }), show: !process.env.CLAUDE_MULTI_SHOT, minWidth: 760, minHeight: 480, title: 'Tasmeer Multi', ...(fs.existsSync(APP_ICON) ? { icon: APP_ICON } : {}),
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#070709' : '#fcfcfb', autoHideMenuBar: true, // DESIGN.md --bg
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, sandbox: true, spellcheck: true },
   });
