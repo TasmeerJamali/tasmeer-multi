@@ -33,6 +33,8 @@ app.whenReady().then(async () => {
   for (const [state, w, h] of STATES.filter(([s]) => !only.length || only.includes(s))) {
     for (const theme of THEMES) {
       const errors = [];
+      // every state starts clean: a draft typed by one state (slash, attach) must not show in the next one
+      await session.defaultSession.clearStorageData({ storages: ['localstorage'] });
       nativeTheme.themeSource = theme; // as the app does before its window opens
       // Offscreen rendering keeps the page's clock running (a plain hidden window freezes transitions
       // and entrances at their first frame), and every paint hands over the whole frame.

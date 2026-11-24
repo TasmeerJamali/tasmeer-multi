@@ -10,26 +10,56 @@ same chat carries on.
 
 ## What it does
 
-- **All your agent chats in one list.** Reads the history that Claude Code (`~/.claude/projects`),
-  Codex (`~/.codex/sessions`) and Antigravity already keep, so chats started in a terminal, an IDE or
-  the vendors' own apps show up too. The app stores no chats of its own. The list is in your order:
-  drag a chat above or below another, pin it, or put it in a folder; activity never reshuffles it.
-- **Any account answers any chat.** Add as many Claude Code and Codex logins as you have. Each gets its
-  own login folder, linked to your one shared history, so a chat started on one account resumes on
-  another. When a reply fails on a usage limit, the app offers the next account.
-- **Usage for every account.** 5-hour and weekly limits with live reset countdowns, for Claude Code,
-  Codex and Gemini (Antigravity's model groups), refreshed on their own.
-- **Runs you can follow.** A reply in progress is one block: everything it did so far, in order, and a
-  last line that always says what it is doing (thinking with its own words, writing a step, running a
-  command, a helper agent's current step, writing the answer).
-- **It can ask you things.** Questions, permission prompts and plan approvals from Claude Code appear as
-  cards in the chat; answer with a click.
-- **Chats can talk to each other.** A Claude chat can list your chats, read one, send one a message
-  (that chat's own account answers it there) or start a new chat for a side task, and get the reply
-  back. This mirrors what the Claude desktop app gives its sessions.
-- **A queue.** Type while a reply is still being written; your message goes when it finishes.
-- **The rest:** files a run shows you as cards, model and effort pickers per chat, slash commands and
-  skills, attachments by paste or drop, voice typing, read-aloud, dark and light themes.
+### All your agent chats in one list
+
+It reads the history that Claude Code (`~/.claude/projects`), Codex (`~/.codex/sessions`) and
+Antigravity already keep, so chats started in a terminal, an IDE or the vendors' own apps show up too.
+The app stores no chats of its own. The list is in your order: drag a chat above or below another, pin
+it, or put it in a folder; activity never reshuffles it.
+
+### Any account answers any chat
+
+Add as many Claude Code and Codex logins as you have. Each gets its own login folder, linked to your one
+shared history, so a chat started on one account resumes on another. When a reply fails on a usage
+limit, the app offers the next account.
+
+![Starting a new chat: every account with its 5-hour and weekly usage left and when each resets](docs/pick-who-answers.png)
+
+### Usage for every account
+
+5-hour and weekly limits with live reset countdowns, for Claude Code, Codex and Gemini (Antigravity's
+model groups), refreshed on their own. Two logins reporting identical numbers get a warning: probably
+the same account signed in twice.
+
+![The account list: a Codex account flagged as a likely duplicate login, and Gemini's two model groups](docs/usage.png)
+
+### Runs you can follow
+
+A reply in progress is one block: everything it did so far, in order, and a last line that always says
+what it is doing (thinking with its own words, writing a step, running a command, a helper agent's
+current step, writing the answer). Type while it works and your message waits in a queue (top picture).
+
+### It can ask you things
+
+Questions, permission prompts and plan approvals from Claude Code appear as cards in the chat; answer
+with a click.
+
+![Claude asking two questions as a card: pick options or type your own answer](docs/questions.png)
+
+### Chats can talk to each other
+
+A Claude chat can list your chats, read one, send one a message (that chat's own account answers it
+there) or start a new chat for a side task, and get the reply back. This mirrors what the Claude desktop
+app gives its sessions.
+
+![A chat handing work to another chat, starting a new one, and getting the reply back](docs/chats-talk.png)
+
+### The rest
+
+Files a run shows you as cards, model and effort pickers per chat, slash commands and skills,
+attachments by paste or drop, voice typing, read-aloud, and dark and light themes.
+
+![The light theme](docs/light.png)
 
 ## Requirements
 
@@ -101,6 +131,7 @@ no account:
 - `npx electron tools/probe.cjs <state> dark "<js>"` loads one state offscreen and prints what the
   expression returns; the window's own tests run this way (for example `live-test`, with its results
   in `window.__liveResult`).
+- `npx electron tools/readme-images.cjs` cuts the pictures in this README from the gallery's shots.
 
 ## License
 
