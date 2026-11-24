@@ -51,13 +51,14 @@ function loadPrefs() {
   }
 }
 let saveTimer = null;
-function savePrefs() {
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
-    try { fs.mkdirSync(root(), { recursive: true }); fs.writeFileSync(prefsFile() + '.tmp', JSON.stringify(prefs, null, 1)); fs.renameSync(prefsFile() + '.tmp', prefsFile()); }
-    catch (e) { try { fs.appendFileSync(path.join(root(), 'errors.log'), new Date().toISOString() + ' save failed: ' + (e && e.stack || e) + '\n'); } catch { /* nothing more to do */ } }
-  }, 250);
+function writePrefs() {
+  try { fs.mkdirSync(root(), { recursive: true }); fs.writeFileSync(prefsFile() + '.tmp', JSON.stringify(prefs, null, 1)); fs.renameSync(prefsFile() + '.tmp', prefsFile()); }
+  catch (e) { try { fs.appendFileSync(path.join(root(), 'errors.log'), new Date().toISOString() + ' save failed: ' + (e && e.stack || e) + '\n'); } catch { /* nothing more to do */ } }
 }
+function savePrefs() { clearTimeout(saveTimer); saveTimer = setTimeout(writePrefs, 250); }
+// Right before the app exits (restart, close): a save still waiting its 250 ms would be lost, so write now.
+// Restart's "reopen the chat you were in" never reached the file before this (Nov 24, 2026).
+function savePrefsNow() { clearTimeout(saveTimer); saveTimer = null; writePrefs(); }
 
 let win = null;
 let sessions = [];          // from history files
@@ -839,7 +840,7 @@ function srcStamp() {
 const bootStamp = srcStamp(); let updateReady = false; let restartWhenIdle = false;
 setInterval(() => { if (!updateReady && srcStamp() > bootStamp + 1000) { updateReady = true; send('update', { ready: true }); } }, 20000);
 function restartApp() {
-  try { if (view && view.key && view.key !== 'new') { prefs.reopen = view.key; savePrefs(); } } catch { /* best effort */ } // come back to the same chat
+  try { if (view && view.key && view.key !== 'new') prefs.reopen = view.key; savePrefsNow(); } catch { /* best effort */ } // come back to the same chat
   try { history.saveCache(path.join(root(), 'index-cache.json')); } catch { /* best effort */ }
   app.relaunch(); app.exit(0);
 }
@@ -962,7 +963,7 @@ function createWindow() {
   const remember = () => { if (!win.isMaximized() && !win.isMinimized()) { prefs.bounds = win.getBounds(); savePrefs(); } };
   win.on('resize', remember); win.on('move', remember);
   win.on('focus', () => { win.flashFrame(false); if (view) markRead(view.key); if (Date.now() - lastUsageRun > 90000) refreshUsage(); refreshGemini(true); }); // back at the window: fresh numbers
-  win.on('close', () => { voice.stopSpeaking(); for (const r of runs.values()) r.handle?.stop(); history.saveCache(path.join(root(), 'index-cache.json')); });
+  win.on('close', () => { voice.stopSpeaking(); for (const r of runs.values()) r.handle?.stop(); history.saveCache(path.join(root(), 'index-cache.json')); savePrefsNow(); });
 
   if (process.env.CLAUDE_MULTI_SHOT) { // test hook: run page steps, then screenshot and quit
     const [out, wait] = process.env.CLAUDE_MULTI_SHOT.split('|');
