@@ -259,6 +259,14 @@ new folder, unpin, a list update mid-drag, a file dropped on the sidebar; result
 18. (same day) The run's own items are found by time, with 0.25 s of slack. With 3 s, a queued message
    (sent 0.3 s after the last reply ended) pulled that reply into its own box for a moment; and "continue"
    sent twice must match the new message, not the older one with the same words.
+22. (Nov 25) Attached files showed as the app's own path list ("Attached file (open from these paths): -
+   C:\...\pasted.png") in the message, and as a 36 px crop in the message box. The paths still go to the
+   agent (it opens files by path), but the window now reads them back out of the message: pictures show
+   whole above your words (up to 320 x 240, their own shape), other files as cards, a click opens either, a
+   deleted picture falls back to a card, and a message of only files drops the app's "Look at the attached
+   file." In the message box a picture shows whole at 64 px tall. Window test: `files-test`.
+21. (Nov 25) A background agent's "finished" notice showed as the user's own message: Claude Code saves it
+   as a queued_command like a message typed mid-reply, marked commandMode "task-notification". Now a note.
 20. (Nov 25) Codex turns failed with no model picked: config.toml named gpt-6.1-sol, which a ChatGPT
    login is refused, and Codex's own model list cannot be trusted to say so (it flipped between 8 and 12
    models in two minutes and listed the refused one). Codex now gets the newest model that really

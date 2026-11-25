@@ -210,6 +210,17 @@
       { role: 'note', text: 'Stopped voice chat, 47m 23s', ts: iso(47 * MIN) },
     ],
   };
+  // "sent-files": messages with files attached show the files (pictures whole, other files as cards). The
+  // pictures are this project's own README pictures, so the demo shows real images without any user data.
+  if (state === 'sent-files' || state === 'files-test') {
+    const REPO = decodeURIComponent(location.pathname.replace(/^\//, '')).replace(/\/src\/app\.html$/, '').replace(/\//g, '\\');
+    chats['claude:long'].push(
+      { role: 'user', text: 'Why is the bar for the team account red, and does the renewal change our limits?\n\nAttached files (open from these paths):\n- ' + REPO + '\\docs\\pick-who-answers.png\n- ' + HOME + '\\Downloads\\Vendor agreement - Acme Hosting - signed renewal (August).pdf', ts: iso(3 * MIN), via: 'Tasmeer Multi' },
+      { role: 'assistant', text: 'Red means under 10% of its 5-hour window is left: team@example.com is at 7%, back at 100% in 2h 11m. The renewal is for hosting only; it does not touch the model limits.', ts: iso(2.6 * MIN), model: 'claude-opus-5-5' },
+      { role: 'user', text: 'Look at the attached file.\n\nAttached file (open from these paths):\n- ' + REPO + '\\docs\\usage.png', ts: iso(70e3), via: 'Tasmeer Multi' },
+      { role: 'assistant', text: 'That is the account list: the second Codex account is flagged because its numbers match the first one exactly.', ts: iso(40e3), model: 'claude-opus-5-5' },
+    );
+  }
   const older = [
     { role: 'user', text: 'first, read the screenshot I attached', ts: iso(70 * MIN), via: 'Tasmeer Multi' },
     { role: 'assistant', text: 'It is an Antigravity window: a dark canvas, a quiet sidebar, and one composer box with the model picker inside.', ts: iso(69 * MIN), model: 'claude-opus-5-5' },
@@ -536,6 +547,31 @@
       r.claudeLine = whoText(); r.claudeButton = btn().hidden ? '(hidden)' : btn().textContent;
       delete lives[key]; emit('live', { key, live: null }); inp.value = ''; inp.dispatchEvent(new Event('input', { bubbles: true }));
       window.__mixedResult = r; console.log('MIXED ' + JSON.stringify(r));
+    },
+    // Files you attached show as the files (Nov 25, 2026): a picture whole, a PDF as a card, no path text;
+    // a file sent alone shows without the app's "Look at the attached file."; a deleted picture becomes a card.
+    'files-test': async () => {
+      const r = {}; const key = 'claude:long'; const T = () => new Date().toISOString();
+      await wait(300);
+      const users = [...document.querySelectorAll('#log .user-wrap')];
+      const two = users.slice(-2);
+      const imgs = two[0].querySelectorAll('.sent-files img.sent-img');
+      r.firstPictures = imgs.length; r.firstPictureLoaded = !!(imgs[0] && imgs[0].complete && imgs[0].naturalWidth > 0);
+      r.firstPictureWhole = !!(imgs[0] && Math.abs(imgs[0].clientWidth / imgs[0].clientHeight - imgs[0].naturalWidth / imgs[0].naturalHeight) < 0.03);
+      r.firstCard = two[0].querySelector('.sent-file .file-name')?.textContent || '';
+      r.firstWords = two[0].querySelector('.msg.user')?.textContent || '';
+      r.filesAboveWords = !!two[0].querySelector('.sent-files + .msg.user');
+      r.aloneHasNoWords = !two[1].querySelector('.msg.user') && !!two[1].querySelector('img.sent-img');
+      r.noPathTextAnywhere = ![...document.querySelectorAll('#log .msg.user')].some((m) => /Attached files? \(open from these paths\)/.test(m.textContent));
+      emit('append', { key, items: [{ role: 'user', text: 'and this one\n\nAttached file (open from these paths):\n- C:\\Users\\you\\Pictures\\deleted-long-ago.png', ts: T(), via: 'Tasmeer Multi' }] });
+      await wait(600);
+      const last = [...document.querySelectorAll('#log .user-wrap')].pop();
+      r.deletedPictureIsACard = !!last.querySelector('.sent-file.missing') && /deleted-long-ago\.png/.test(last.textContent);
+      emit('queue', { key, items: [{ id: 'qf', text: 'compare with this\n\nAttached file (open from these paths):\n- C:\\Users\\you\\Downloads\\budget.xlsx', by: 'you', from: null, at: Date.now() }] }); await wait(300);
+      const q = document.querySelector('#log .queued');
+      r.queuedShowsCard = !!(q && q.querySelector('.sent-file') && !/Attached file/.test(q.textContent));
+      emit('queue', { key, items: [] });
+      window.__filesResult = r; console.log('FILES ' + JSON.stringify(r));
     },
     // what a run asks you: one click answers one question; several questions, a typed answer that
     // survives a redraw, and a permission denied with a reason

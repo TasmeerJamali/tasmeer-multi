@@ -385,6 +385,45 @@ function renderRelay(p) { // a message this chat sent another chat, or a chat it
 // ---------- files a run showed you, questions it asked, plans it proposed (from the chat file) ----------
 const IMG = /\.(png|jpe?g|gif|webp|bmp|svg)$/i;
 const fileUrl = (p) => 'file:///' + String(p).replace(/\\/g, '/').split('/').map((s, i) => (i === 0 && /^[A-Za-z]:$/.test(s) ? s : encodeURIComponent(s))).join('/');
+// Files you attached (Nov 25, 2026): the app sends their paths after your words ("Attached file(s) (open
+// from these paths):" and a "- path" line each), so Claude, Codex or Gemini can open them. In the chat they
+// show as the files themselves, as the Claude app shows them: pictures whole above your words, other files
+// as small cards; a click opens one.
+const ATTACHED = /\n*Attached files? \(open from these paths\):\n((?:- [^\n]+\n?)+)\s*$/;
+function splitAttached(text) {
+  const t = String(text || ''); const m = ATTACHED.exec(t);
+  if (!m) return { text: t, files: [] };
+  const files = m[1].split('\n').map((l) => l.replace(/^- /, '').trim()).filter(Boolean);
+  let rest = t.slice(0, m.index).trim();
+  if (/^Look at the attached files?\.$/.test(rest)) rest = ''; // the app's own words when you sent only files
+  return { text: rest, files };
+}
+function attachedNode(files) {
+  const row = el('div', 'sent-files');
+  for (const f of files) {
+    const name = f.split(/[\\/]/).pop().replace(/^\d{10,}-[0-9a-f]{6,}-/, ''); // a pasted picture's saved name starts with a time and an id
+    const ext = (name.includes('.') ? name.split('.').pop() : '').toUpperCase().slice(0, 5) || 'FILE';
+    const card = (missing) => {
+      const c = el('button', 'sent-file' + (missing ? ' missing' : '')); c.type = 'button';
+      c.title = f + (missing ? '\n(not on this PC any more)' : '\nClick to open');
+      c.append(el('span', 'file-ext', ext), el('span', 'file-name', name)); c.onclick = () => M.openFile(f);
+      return c;
+    };
+    if (IMG.test(f)) {
+      const im = document.createElement('img'); im.className = 'sent-img'; im.alt = name; im.title = name + '\nClick to open it full size';
+      im.loading = 'lazy'; im.src = fileUrl(f); im.onclick = () => M.openFile(f); im.onerror = () => im.replaceWith(card(true));
+      row.append(im);
+    } else row.append(card(false));
+  }
+  return row;
+}
+// A message of yours as the chat shows it: what you attached, then your words (cls: its bubble's classes)
+function userNodes(text, cls) {
+  const a = splitAttached(text); const out = [];
+  if (a.files.length) out.push(attachedNode(a.files));
+  if (a.text || !a.files.length) { const m = el('div', cls, a.text.length > 6000 ? a.text.slice(0, 6000) + '\n...' : a.text); m.dataset.fit = ''; out.push(m); }
+  return out;
+}
 function renderFiles(p) {
   const box = el('div', 'files');
   if (p.caption) box.append(el('div', 'files-cap', p.caption));
@@ -534,8 +573,7 @@ function blockNode(b) {
     const rel = relayOf(b.text); const text = rel ? rel.body : b.text;
     const w = el('div', 'user-wrap blk' + (rel ? ' relay-in' : ''));
     if (rel) w.append(relayFrom(rel));
-    const m = el('div', 'msg user', text.length > 6000 ? text.slice(0, 6000) + '\n...' : text); m.dataset.fit = '';
-    w.append(m);
+    w.append(...userNodes(text, 'msg user'));
     const via = rel || b.midRun ? '' : b.via; // a message from another chat says so above it, not "sent from headless"
     const told = b.caughtUp ? 'with what the other agent did since' : ''; // a mixed chat: the app passed the other engine's turns along
     if (b.ts || via || b.midRun || told) { const st = el('div', 'stamp', [b.ts ? when(b.ts) : '', b.midRun ? 'sent while it worked' : via ? 'sent from ' + via : '', told].filter(Boolean).join(', ')); if (told) st.title = 'Tasmeer Multi put a short account of the turns this agent did not see in front of your message'; w.append(st); }
@@ -651,8 +689,7 @@ function queueNodes(k) { // your messages (and other chats') waiting for this ch
       row.append(now);
     }
     row.append(x);
-    const m = el('div', 'msg user pending', rel ? rel.body : q.text); m.dataset.fit = '';
-    w.append(row, m);
+    w.append(row, ...userNodes(rel ? rel.body : q.text, 'msg user pending'));
     out.push(w);
   }
   return out;
@@ -664,8 +701,7 @@ function saidNodes(k) {
   const landed = (m) => cur.items.some((it) => it.role === 'user' && it.text.trim() === m.text.trim() && (tsOf(it) || 0) >= m.at - 2000);
   return live.said.filter((m) => !landed(m)).map((m) => {
     const w = el('div', 'user-wrap live-part said');
-    const b = el('div', 'msg user pending', m.text); b.dataset.fit = '';
-    w.append(b, el('div', 'stamp', m.taken ? 'Claude has it' : 'Sent: Claude reads it after the step it is on'));
+    w.append(...userNodes(m.text, 'msg user pending'), el('div', 'stamp', m.taken ? 'Claude has it' : 'Sent: Claude reads it after the step it is on'));
     enterOnce(w, 's:' + k + ':' + m.at, 'arrive', 500);
     return w;
   });
@@ -690,7 +726,7 @@ function liveNodes() {
       const rel = relayOf(live.user);
       const w = el('div', 'user-wrap live-part' + (rel ? ' relay-in' : ''));
       if (rel) w.append(relayFrom(rel));
-      w.append(el('div', 'msg user pending', rel ? rel.body : live.user));
+      w.append(...userNodes(rel ? rel.body : live.user, 'msg user pending'));
       enterOnce(w, 'u:' + k + ':' + live.user, 'arrive', 500); landed = live.user.trim();
       out.push(w);
     }
@@ -1135,8 +1171,9 @@ const fmtSize = (n) => (n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : n >= 1
 function renderAttach() {
   const box = $('#attach'); box.textContent = ''; box.hidden = !attachments.length;
   attachments.forEach((f, i) => {
-    const chip = el('span', 'file-chip'); chip.title = f.path;
-    if (f.thumb) { const im = document.createElement('img'); im.src = f.thumb; im.alt = ''; chip.append(im); }
+    const chip = el('span', 'file-chip' + (f.thumb ? ' pic' : '')); chip.title = f.path;
+    // a picture shows whole, 64 px tall, the way the Claude app shows it before you send; a click opens it
+    if (f.thumb) { const im = document.createElement('img'); im.src = f.thumb; im.alt = ''; im.title = 'Open it full size'; im.onclick = () => M.openFile(f.path); chip.append(im); }
     else chip.append(el('span', 'file-ext', f.ext || 'FILE'));
     const info = el('span', 'file-info'); info.append(el('span', 'file-name', f.name), el('span', 'file-meta', [f.ext, f.dims, f.size != null ? fmtSize(f.size) : ''].filter(Boolean).join(', ')));
     chip.append(info);
@@ -1145,13 +1182,14 @@ function renderAttach() {
     chip.append(x); box.append(chip);
   });
 }
-// A small preview (max 96 px) so the chip shows which picture it is, without keeping the full image in memory.
+// A preview (max 256 px, sharp at 64 px tall on a 2x screen) so the chip shows the picture, without keeping the
+// full image in memory.
 function thumbOf(file) {
   return new Promise((resolve) => {
     if (!/^image\//.test(file.type)) return resolve(null);
     const url = URL.createObjectURL(file); const im = new Image();
     im.onload = () => {
-      const k = Math.min(1, 96 / Math.max(im.width, im.height)); const c = document.createElement('canvas');
+      const k = Math.min(1, 256 / Math.max(im.width, im.height)); const c = document.createElement('canvas');
       c.width = Math.max(1, Math.round(im.width * k)); c.height = Math.max(1, Math.round(im.height * k));
       c.getContext('2d').drawImage(im, 0, 0, c.width, c.height); URL.revokeObjectURL(url);
       resolve({ thumb: c.toDataURL('image/jpeg', 0.8), dims: im.width + '×' + im.height });
