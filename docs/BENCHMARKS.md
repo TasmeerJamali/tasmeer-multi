@@ -22,3 +22,4 @@ Automated latency, memory, and frame-rate benchmark verification log.
 - **Benchmark 18**: Verified Native dialog file picker response latency (< 90 ms) `[PASS - 2026-11-26]`
 - **Benchmark 19**: Verified System tray icon context menu rendering latency (< 15 ms) `[PASS - 2026-11-26]`
 - **Benchmark 20**: Verified Taskbar preview thumbnail capture throughput `[PASS - 2026-11-26]`
+- **Benchmark 21**: Verified Process crash recovery and partition restore resilience `[PASS - 2026-11-26]`
