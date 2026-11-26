@@ -14,3 +14,4 @@ Automated latency, memory, and frame-rate benchmark verification log.
 - **Benchmark 10**: Verified Session partition cookie write serialization latency (< 5 ms) `[PASS - 2026-11-26]`
 - **Benchmark 11**: Verified Local storage quota and compaction performance check `[PASS - 2026-11-26]`
 - **Benchmark 12**: Verified Multi-window tiling redraw latency under active window resize (< 16 ms) `[PASS - 2026-11-26]`
+- **Benchmark 13**: Verified Audio stream capture pipeline latency on Windows CoreAudio (< 40 ms) `[PASS - 2026-11-26]`
