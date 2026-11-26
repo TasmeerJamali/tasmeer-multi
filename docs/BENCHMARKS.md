@@ -13,3 +13,4 @@ Automated latency, memory, and frame-rate benchmark verification log.
 - **Benchmark 9**: Verified Global accelerator hotkey latency from background to focused (< 25 ms) `[PASS - 2026-11-26]`
 - **Benchmark 10**: Verified Session partition cookie write serialization latency (< 5 ms) `[PASS - 2026-11-26]`
 - **Benchmark 11**: Verified Local storage quota and compaction performance check `[PASS - 2026-11-26]`
+- **Benchmark 12**: Verified Multi-window tiling redraw latency under active window resize (< 16 ms) `[PASS - 2026-11-26]`
