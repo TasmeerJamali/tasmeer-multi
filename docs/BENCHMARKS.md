@@ -36,3 +36,4 @@ Automated latency, memory, and frame-rate benchmark verification log.
 - **Benchmark 32**: Verified NSIS installer unpack and execution benchmark (< 4.5 s) `[PASS - 2026-11-26]`
 - **Benchmark 33**: Verified Portable binary launch time from external drive (< 1.2 s) `[PASS - 2026-11-26]`
 - **Benchmark 34**: Verified Single instance lock acquire and window focus transfer (< 18 ms) `[PASS - 2026-11-26]`
+- **Benchmark 35**: Verified Renderer process CPU utilization during idle monitor (< 0.4%) `[PASS - 2026-11-26]`
