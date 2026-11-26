@@ -26,3 +26,4 @@ Automated latency, memory, and frame-rate benchmark verification log.
 - **Benchmark 22**: Verified Background timer throttling battery consumption profile `[PASS - 2026-11-26]`
 - **Benchmark 23**: Verified Network offline event propagation and cached view fallback `[PASS - 2026-11-26]`
 - **Benchmark 24**: Verified Preload script context bridge memory leak profiling `[PASS - 2026-11-26]`
+- **Benchmark 25**: Verified DOM ready event latency across cold partition spawns (< 350 ms) `[PASS - 2026-11-26]`
